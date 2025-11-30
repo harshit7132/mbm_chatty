@@ -5,6 +5,7 @@ import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Group from "../models/group.model.js";
 import cloudinary from "./cloudinary.js";
+import { updateUserChallengeProgress } from "./challengeProgress.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +18,55 @@ const io = new Server(server, {
 });
 
 export function getReceiverSocketId(userId) {
-  return userSocketMap[userId];
+  if (!userId) {
+    console.warn("⚠️ getReceiverSocketId called with null/undefined userId");
+    return null;
+  }
+  
+  // Normalize userId to string for consistent lookup
+  const normalizedUserId = String(userId).trim();
+  
+  // First, try direct lookup
+  let socketId = userSocketMap[normalizedUserId];
+  
+  if (socketId) {
+    console.log("✅ Found socket by direct lookup:", normalizedUserId, "→", socketId);
+    return socketId;
+  }
+  
+  // If not found, try to find by checking all entries (case-insensitive, format variations)
+  console.log("🔍 Socket not found by direct lookup, searching all entries...");
+  console.log("   Looking for:", normalizedUserId);
+  console.log("   Available keys:", Object.keys(userSocketMap));
+  
+  for (const [mapUserId, mapSocketId] of Object.entries(userSocketMap)) {
+    const normalizedMapUserId = String(mapUserId).trim();
+    
+    // Try exact match
+    if (normalizedMapUserId === normalizedUserId) {
+      console.log("✅ Found socket by exact match:", mapUserId, "→", mapSocketId);
+      // Update the map with normalized key for future lookups
+      userSocketMap[normalizedUserId] = mapSocketId;
+      return mapSocketId;
+    }
+    
+    // Try case-insensitive match
+    if (normalizedMapUserId.toLowerCase() === normalizedUserId.toLowerCase()) {
+      console.log("✅ Found socket by case-insensitive match:", mapUserId, "→", mapSocketId);
+      userSocketMap[normalizedUserId] = mapSocketId;
+      return mapSocketId;
+    }
+    
+    // Try partial match (in case of ObjectId wrapper issues)
+    if (normalizedMapUserId.includes(normalizedUserId) || normalizedUserId.includes(normalizedMapUserId)) {
+      console.log("✅ Found socket by partial match:", mapUserId, "→", mapSocketId);
+      userSocketMap[normalizedUserId] = mapSocketId;
+      return mapSocketId;
+    }
+  }
+  
+  console.log("❌ Socket not found for userId:", normalizedUserId);
+  return null;
 }
 
 // used to store online users
@@ -29,22 +78,86 @@ io.on("connection", (socket) => {
   // Store userId for this socket connection
   let userId = socket.handshake.query.userId;
   if (userId) {
-    userSocketMap[userId] = socket.id;
-    console.log("User connected with userId:", userId, "socketId:", socket.id);
+    // Normalize userId to string for consistent lookup
+    const normalizedUserId = String(userId).trim();
+    userSocketMap[normalizedUserId] = socket.id;
+    userId = normalizedUserId; // Update local variable
+    console.log("✅ User connected - userId:", normalizedUserId, "socketId:", socket.id);
+    console.log("📊 Current userSocketMap keys:", Object.keys(userSocketMap));
+    
+    // Update user online status in MongoDB
+    User.findByIdAndUpdate(normalizedUserId, {
+      isOnline: true,
+      lastSeen: new Date()
+    }, { new: true }).catch(err => {
+      console.error("Error updating user online status:", err);
+    });
   }
 
   // Emit join event
-  socket.on("join", ({ userId: joinUserId }) => {
+  socket.on("join", async ({ userId: joinUserId }) => {
     if (joinUserId) {
-      userId = joinUserId; // Update userId for this socket
-      userSocketMap[userId] = socket.id;
-      console.log("User joined with userId:", userId, "socketId:", socket.id);
-      io.emit("getOnlineUsers", Object.keys(userSocketMap));
+      // Normalize userId to string for consistent lookup
+      const normalizedUserId = String(joinUserId).trim();
+      userId = normalizedUserId; // Update userId for this socket
+      
+      // Store in map with normalized key
+      userSocketMap[normalizedUserId] = socket.id;
+      
+      // Also store with any variations to ensure lookup works
+      // Remove any ObjectId wrapper if present
+      const cleanUserId = normalizedUserId.replace(/^ObjectId\(|\)$/g, '').trim();
+      if (cleanUserId !== normalizedUserId) {
+        userSocketMap[cleanUserId] = socket.id;
+      }
+      
+      console.log("✅ User joined - userId:", normalizedUserId, "socketId:", socket.id);
+      console.log("📊 Updated userSocketMap keys:", Object.keys(userSocketMap));
+      console.log("📊 Full userSocketMap:", JSON.stringify(userSocketMap, null, 2));
+      
+      // Update user online status in MongoDB
+      try {
+        await User.findByIdAndUpdate(normalizedUserId, {
+          isOnline: true,
+          lastSeen: new Date()
+        });
+        console.log("✅ Updated user online status in MongoDB for:", normalizedUserId);
+      } catch (err) {
+        console.error("❌ Error updating user online status:", err);
+      }
+      
+      // Get all online users from MongoDB (for cross-device sync)
+      try {
+        const onlineUsersFromDB = await User.find({ isOnline: true }).select("_id");
+        const onlineUserIds = onlineUsersFromDB.map(u => u._id.toString());
+        console.log("📊 Online users from MongoDB:", onlineUserIds.length);
+        
+        // Merge with in-memory map (socket connections)
+        const allOnlineUsers = [...new Set([...Object.keys(userSocketMap), ...onlineUserIds])];
+        io.emit("getOnlineUsers", allOnlineUsers);
+      } catch (err) {
+        console.error("❌ Error fetching online users from MongoDB:", err);
+        // Fallback to in-memory map only
+        io.emit("getOnlineUsers", Object.keys(userSocketMap));
+      }
+      
+      io.emit("user-online", normalizedUserId);
+    } else {
+      console.error("❌ Join event received without userId");
     }
   });
 
   // io.emit() is used to send events to all the connected clients
+  console.log("📊 Emitting getOnlineUsers with:", Object.keys(userSocketMap));
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
+  
+  // Log socket map state periodically for debugging
+  setInterval(() => {
+    if (Object.keys(userSocketMap).length > 0) {
+      console.log("📊 [DEBUG] Current userSocketMap:", userSocketMap);
+      console.log("📊 [DEBUG] Socket map keys:", Object.keys(userSocketMap));
+    }
+  }, 30000); // Every 30 seconds
 
   // Handle send-message event
   socket.on("send-message", async (data) => {
@@ -127,6 +240,43 @@ io.on("connection", (socket) => {
           }
         });
 
+        // Update challenge progress for this specific user (user-specific progress)
+        try {
+          const updatedChallenges = await updateUserChallengeProgress(currentUserId, "message", 1);
+          if (updatedChallenges.length > 0) {
+            // Emit updated challenges to this specific user for real-time updates
+            const userSocketId = getReceiverSocketId(currentUserId.toString());
+            if (userSocketId) {
+              const challengeUpdates = updatedChallenges.map(c => {
+                const challengeObj = c.toObject ? c.toObject() : c;
+                return {
+                  _id: challengeObj._id,
+                  title: challengeObj.title,
+                  description: challengeObj.description,
+                  type: challengeObj.type,
+                  current: challengeObj.current,
+                  target: challengeObj.target,
+                  completed: challengeObj.completed,
+                  completedAt: challengeObj.completedAt,
+                  reward: challengeObj.reward,
+                  stages: challengeObj.stages,
+                  stage: challengeObj.stage,
+                  maxStages: challengeObj.maxStages,
+                  expiresAt: challengeObj.expiresAt,
+                  userId: challengeObj.userId
+                };
+              });
+              
+              io.to(userSocketId).emit("challenge-updated", challengeUpdates);
+              console.log(`✅ Updated ${updatedChallenges.length} challenges for user ${currentUserId} and emitted real-time update`);
+            } else {
+              console.log(`⚠️ User ${currentUserId} not connected, challenge progress saved but not emitted`);
+            }
+          }
+        } catch (challengeError) {
+          console.error("Error updating challenge progress:", challengeError);
+        }
+
         return;
       }
       
@@ -192,16 +342,87 @@ io.on("connection", (socket) => {
       };
 
       // Emit to receiver
-      const receiverSocketId = getReceiverSocketId(receiverId);
+      const receiverSocketId = getReceiverSocketId(receiverId.toString());
       if (receiverSocketId) {
+        console.log("📤 Emitting new-message to receiver:", receiverId, "socketId:", receiverSocketId);
         io.to(receiverSocketId).emit("new-message", messageWithChatId);
+        console.log("✅ Message emitted to receiver successfully");
+      } else {
+        console.log("⚠️ Receiver not online, message saved to MongoDB:", receiverId);
+        console.log("📊 Available sockets:", Object.keys(userSocketMap));
       }
 
-      // Emit back to sender for confirmation
-      socket.emit("new-message", messageWithChatId);
+      // Emit back to sender for confirmation (always emit to sender)
+      // Only emit once - prefer socket.emit if senderSocketId matches current socket
+      const senderSocketId = getReceiverSocketId(senderId.toString());
+      if (senderSocketId && senderSocketId === socket.id) {
+        // Sender is the current socket, emit directly (more efficient)
+        console.log("📤 Emitting new-message to sender (current socket):", socket.id);
+        socket.emit("new-message", messageWithChatId);
+        console.log("✅ Message confirmation emitted to sender");
+      } else if (senderSocketId) {
+        // Sender has a different socket connection, emit via room
+        console.log("📤 Emitting new-message to sender for confirmation:", senderId, "socketId:", senderSocketId);
+        io.to(senderSocketId).emit("new-message", messageWithChatId);
+        console.log("✅ Message confirmation emitted to sender");
+      } else {
+        // Fallback: emit directly to the socket that sent the message
+        console.log("📤 Emitting new-message directly to sender socket (fallback):", socket.id);
+        socket.emit("new-message", messageWithChatId);
+      }
 
       // Update chat counts
       await User.findByIdAndUpdate(senderId, { $inc: { chatCount: 1, totalChats: 1 } });
+      
+      // Update challenge progress for this specific user (user-specific progress)
+      try {
+        console.log(`🔄 [SOCKET] Updating challenge progress for user ${senderId} after sending message`);
+        const updatedChallenges = await updateUserChallengeProgress(senderId, "message", 1);
+        console.log(`🔄 [SOCKET] Updated ${updatedChallenges.length} challenges for user ${senderId}`);
+        
+        if (updatedChallenges.length > 0) {
+          // Emit updated challenges to this specific user for real-time updates
+          const senderSocketId = getReceiverSocketId(senderId.toString());
+          console.log(`🔍 [SOCKET] Looking for socket for user ${senderId}, found: ${senderSocketId}`);
+          
+          if (senderSocketId) {
+            const challengeUpdates = updatedChallenges.map(c => {
+              const challengeObj = c.toObject ? c.toObject() : c;
+              return {
+                _id: challengeObj._id,
+                title: challengeObj.title,
+                description: challengeObj.description,
+                type: challengeObj.type,
+                current: challengeObj.current,
+                target: challengeObj.target,
+                completed: challengeObj.completed,
+                completedAt: challengeObj.completedAt,
+                reward: challengeObj.reward,
+                stages: challengeObj.stages,
+                stage: challengeObj.stage,
+                maxStages: challengeObj.maxStages,
+                expiresAt: challengeObj.expiresAt,
+                userId: challengeObj.userId
+              };
+            });
+            
+            console.log(`📤 [SOCKET] Emitting challenge-updated to socket ${senderSocketId} with ${challengeUpdates.length} challenges`);
+            console.log(`📤 [SOCKET] Challenge data:`, challengeUpdates.map(c => ({ title: c.title, current: c.current, target: c.target })));
+            
+            io.to(senderSocketId).emit("challenge-updated", challengeUpdates);
+            console.log(`✅ [SOCKET] Emitted challenge-updated event to user ${senderId}`);
+          } else {
+            console.log(`⚠️ [SOCKET] User ${senderId} not connected, challenge progress saved but not emitted`);
+            console.log(`⚠️ [SOCKET] Available sockets:`, Object.keys(userSocketMap));
+          }
+        } else {
+          console.log(`⚠️ [SOCKET] No challenges were updated for user ${senderId}`);
+        }
+      } catch (challengeError) {
+        console.error("❌ [SOCKET] Error updating challenge progress:", challengeError);
+        console.error("❌ [SOCKET] Error stack:", challengeError.stack);
+        // Don't fail message sending if challenge update fails
+      }
       
       // Add each other as friends if not already friends
       const sender = await User.findById(senderId);
@@ -282,20 +503,37 @@ io.on("connection", (socket) => {
 
       // Handle delete-message event
       socket.on("delete-message", async (data) => {
+        console.log(`🗑️ [BACKEND] ========== DELETE MESSAGE EVENT RECEIVED ==========`);
+        console.log(`🗑️ [BACKEND] Data:`, JSON.stringify(data, null, 2));
         try {
+          console.log(`🗑️ [BACKEND] Delete-message event received:`, data);
           const currentUserId = userId || socket.handshake.query.userId;
           if (!currentUserId) {
-            console.error("No userId for delete-message event");
+            console.error("❌ [BACKEND] No userId for delete-message event");
             return;
           }
+          console.log(`✅ [BACKEND] Current user ID: ${currentUserId}`);
 
-          const { messageId } = data;
+          const { messageId, confirmed } = data;
+          console.log(`🔍 [BACKEND] Looking for message: ${messageId}, confirmed: ${confirmed}`);
+          
+          // Check if this is an optimistic/temporary message ID
+          if (messageId && messageId.toString().startsWith("temp_")) {
+            console.log(`⏭️ [BACKEND] Skipping optimistic message deletion: ${messageId}`);
+            socket.emit("message-error", { 
+              error: "Cannot delete optimistic message", 
+              details: "This message hasn't been saved to the server yet" 
+            });
+            return;
+          }
+          
           const message = await Message.findById(messageId);
 
           if (!message) {
-            console.error("Message not found:", messageId);
+            console.error("❌ [BACKEND] Message not found:", messageId);
             return;
           }
+          console.log(`✅ [BACKEND] Message found: sender=${message.senderId}, receiver=${message.receiverId}`);
 
           let chatId;
           let isGroupMessage = false;
@@ -337,8 +575,272 @@ io.on("connection", (socket) => {
             }
           }
 
+          // Check if deleting this message affects challenge progress (only for sender)
+          // Do this BEFORE deleting to show warning if needed
+          let challengeReversal = null;
+          let thresholdWarning = null;
+          
+          console.log(`🔍 [BACKEND] Checking if user is sender...`);
+          console.log(`   Message sender: ${message.senderId.toString()}`);
+          console.log(`   Current user: ${currentUserId.toString()}`);
+          const isSender = message.senderId.toString() === currentUserId.toString();
+          console.log(`   Match: ${isSender}`);
+          
+          if (isSender) {
+            console.log(`✅ [BACKEND] User is sender, checking challenges...`);
+            // First, check what would happen (simulate deletion)
+            // We need to check challenges BEFORE actually deleting
+            const UserChallenge = (await import("../models/userChallenge.model.js")).default;
+            console.log(`📊 [BACKEND] Querying challenges for user: ${currentUserId}`);
+            const challenges = await UserChallenge.find({
+              $or: [
+                { userId: currentUserId },
+                { userId: currentUserId.toString() }
+              ]
+            });
+            console.log(`📊 [BACKEND] Found ${challenges.length} challenges from MongoDB`);
+            
+            if (challenges.length > 0) {
+              console.log(`📋 [BACKEND] Challenge details:`, challenges.map(c => ({
+                id: c._id,
+                title: c.title,
+                current: c.current,
+                target: c.target,
+                completed: c.completed,
+                completedAt: c.completedAt,
+                type: c.type
+              })));
+            }
+
+            const affectedChallenges = [];
+            let totalPointsRevoked = 0;
+            const revokedBadges = [];
+            const warningChallenges = [];
+
+            for (const challenge of challenges) {
+              const title = (challenge.title || "").toLowerCase();
+              const description = (challenge.description || "").toLowerCase();
+              
+              const isMessageChallenge = title.includes("message") || title.includes("send") || 
+                                        title.includes("text") || title.includes("chat") ||
+                                        description.includes("message") || description.includes("send") ||
+                                        description.includes("chat");
+
+              if (!isMessageChallenge) {
+                console.log(`⏭️ [BACKEND] Skipping challenge "${challenge.title}" - not message-related`);
+                continue;
+              }
+
+              console.log(`🔍 [BACKEND] Checking challenge "${challenge.title}": current=${challenge.current}, target=${challenge.target}, completed=${challenge.completed}`);
+              const newCurrent = Math.max(0, (challenge.current || 0) - 1);
+              console.log(`🔍 [BACKEND] After deletion: newCurrent=${newCurrent}`);
+              
+              // Check if challenge would become incomplete (only if completed within 5 minutes)
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+              const wasCompletedRecently = challenge.completedAt && new Date(challenge.completedAt) >= fiveMinutesAgo;
+              
+              console.log(`🔍 [BACKEND] Challenge "${challenge.title}": completed=${challenge.completed}, completedAt=${challenge.completedAt}, wasCompletedRecently=${wasCompletedRecently}`);
+              
+              if (challenge.completed && newCurrent < challenge.target && wasCompletedRecently) {
+                console.log(`⚠️ [BACKEND] Challenge "${challenge.title}" would be reversed!`);
+                if (challenge.reward?.points) {
+                  totalPointsRevoked += challenge.reward.points;
+                }
+                if (challenge.reward?.badge) {
+                  revokedBadges.push(challenge.reward.badge);
+                }
+                affectedChallenges.push({
+                  _id: challenge._id,
+                  title: challenge.title,
+                  pointsRevoked: challenge.reward?.points || 0,
+                  badgeRevoked: challenge.reward?.badge || null,
+                });
+                console.log(`✅ [BACKEND] Added to affectedChallenges: ${challenge.title}, points=${challenge.reward?.points || 0}`);
+              } else if (challenge.completed && newCurrent < challenge.target) {
+                console.log(`⏭️ [BACKEND] Challenge "${challenge.title}" completed but not recently (${challenge.completedAt}), skipping reversal`);
+              }
+              
+              // Check for threshold warning: if user is close to a challenge threshold
+              // Show warning if deletion would move user away from target when they're close
+              // Example: target is 10, user has 9 (1 away), deletes 1 → has 8 (2 away) → warn
+              // Example: target is 10, user has 8 (2 away), deletes 1 → has 7 (3 away) → warn
+              
+              // Only check if challenge is not completed
+              if (challenge.completed) {
+                continue; // Already completed, skip warning
+              }
+              
+              // Check if user is close to target (within 2 messages) and deletion would move them away
+              // If current is within 2 messages of target, and deletion would decrease current
+              const distanceFromTarget = challenge.target - challenge.current;
+              const newDistanceFromTarget = challenge.target - newCurrent;
+              
+              console.log(`🔍 [BACKEND] Challenge "${challenge.title}": current=${challenge.current}, target=${challenge.target}, distance=${distanceFromTarget}, newDistance=${newDistanceFromTarget}`);
+              
+              // Warn if user is within 2 messages of target and deletion would move them further away
+              if (distanceFromTarget <= 2 && distanceFromTarget > 0 && newDistanceFromTarget > distanceFromTarget) {
+                console.log(`⚠️ [BACKEND] Threshold warning: User is ${distanceFromTarget} away, deletion would make it ${newDistanceFromTarget} away`);
+                warningChallenges.push({
+                  _id: challenge._id,
+                  title: challenge.title,
+                  target: challenge.target,
+                  current: challenge.current,
+                  newCurrent: newCurrent,
+                  points: challenge.reward?.points || 0,
+                });
+              }
+            }
+
+            console.log(`📊 [BACKEND] Summary: ${affectedChallenges.length} reversals, ${warningChallenges.length} warnings`);
+            
+            if (affectedChallenges.length > 0) {
+              challengeReversal = {
+                affectedChallenges,
+                totalPointsRevoked,
+                revokedBadges,
+                hasReversals: true
+              };
+              console.log(`✅ [BACKEND] Challenge reversal detected:`, challengeReversal);
+            }
+            
+            if (warningChallenges.length > 0) {
+              thresholdWarning = {
+                challenges: warningChallenges,
+                hasWarnings: true
+              };
+              console.log(`✅ [BACKEND] Threshold warning detected:`, thresholdWarning);
+            }
+          } else {
+            console.log(`⏭️ [BACKEND] User is not the sender, skipping challenge checks`);
+          }
+          
+          // If threshold warning exists and user hasn't confirmed, show warning first
+          if (thresholdWarning && thresholdWarning.hasWarnings && !confirmed) {
+            console.log(`⚠️ [BACKEND] Warning user about approaching challenge thresholds`);
+            console.log(`⚠️ [BACKEND] Threshold warning data:`, JSON.stringify(thresholdWarning, null, 2));
+            const senderSocketId = getReceiverSocketId(currentUserId.toString());
+            if (senderSocketId) {
+              io.to(senderSocketId).emit("delete-threshold-warning", {
+                messageId,
+                warningData: thresholdWarning
+              });
+              console.log(`✅ [BACKEND] Emitted delete-threshold-warning to socket ${senderSocketId}`);
+            } else {
+              socket.emit("delete-threshold-warning", {
+                messageId,
+                warningData: thresholdWarning
+              });
+              console.log(`✅ [BACKEND] Emitted delete-threshold-warning to current socket ${socket.id}`);
+            }
+            return; // Don't delete yet, wait for confirmation
+          }
+
+          // If reversals would occur and user hasn't confirmed, send warning
+          if (challengeReversal && challengeReversal.hasReversals && !confirmed) {
+            console.log(`⚠️ [BACKEND] Warning user about challenge reversals before deletion`);
+            console.log(`⚠️ [BACKEND] Reversal data:`, JSON.stringify(challengeReversal, null, 2));
+            const senderSocketId = getReceiverSocketId(currentUserId.toString());
+            if (senderSocketId) {
+              io.to(senderSocketId).emit("delete-warning", {
+                messageId,
+                reversalData: challengeReversal
+              });
+              console.log(`✅ [BACKEND] Emitted delete-warning to socket ${senderSocketId}`);
+            } else {
+              socket.emit("delete-warning", {
+                messageId,
+                reversalData: challengeReversal
+              });
+              console.log(`✅ [BACKEND] Emitted delete-warning to current socket ${socket.id}`);
+            }
+            return; // Don't delete yet, wait for confirmation
+          }
+          
+          // Debug: Log if no warnings/reversals
+          if (!thresholdWarning && !challengeReversal) {
+            console.log(`ℹ️ [BACKEND] No warnings or reversals for message deletion`);
+            console.log(`ℹ️ [BACKEND] thresholdWarning:`, thresholdWarning);
+            console.log(`ℹ️ [BACKEND] challengeReversal:`, challengeReversal);
+          }
+
+          // User confirmed or no reversals - proceed with deletion
+          // Now actually reverse the rewards if confirmed
+          if (challengeReversal && challengeReversal.hasReversals && confirmed) {
+            const { reverseChallengeRewards } = await import("./challengeProgress.js");
+            const reversalResult = await reverseChallengeRewards(currentUserId, 1);
+            
+            // Get updated challenges from MongoDB after reversal
+            const UserChallenge = (await import("../models/userChallenge.model.js")).default;
+            const updatedChallenges = await UserChallenge.find({
+              $or: [
+                { userId: currentUserId },
+                { userId: currentUserId.toString() }
+              ]
+            });
+            
+            // Emit updated challenges in real-time
+            const challengeUpdates = updatedChallenges
+              .filter(c => {
+                const title = (c.title || "").toLowerCase();
+                const description = (c.description || "").toLowerCase();
+                return title.includes("message") || title.includes("send") || 
+                       title.includes("text") || title.includes("chat") ||
+                       description.includes("message") || description.includes("send") ||
+                       description.includes("chat");
+              })
+              .map(c => {
+                const challengeObj = c.toObject ? c.toObject() : c;
+                return {
+                  _id: challengeObj._id,
+                  title: challengeObj.title,
+                  description: challengeObj.description,
+                  type: challengeObj.type,
+                  current: challengeObj.current,
+                  target: challengeObj.target,
+                  completed: challengeObj.completed,
+                  completedAt: challengeObj.completedAt,
+                  reward: challengeObj.reward,
+                  stages: challengeObj.stages,
+                  stage: challengeObj.stage,
+                  maxStages: challengeObj.maxStages,
+                  expiresAt: challengeObj.expiresAt,
+                  userId: challengeObj.userId
+                };
+              });
+            
+            const senderSocketId = getReceiverSocketId(currentUserId.toString());
+            if (senderSocketId) {
+              io.to(senderSocketId).emit("challenge-updated", challengeUpdates);
+              console.log(`✅ Emitted updated challenges after reversal to user ${currentUserId}`);
+            }
+            
+            // Emit challenge reversal event to the user
+            socket.emit("challenge-reversed", {
+              totalPointsRevoked: challengeReversal.totalPointsRevoked,
+              affectedChallenges: challengeReversal.affectedChallenges,
+              revokedBadges: challengeReversal.revokedBadges,
+            });
+            
+            // Emit points update to refresh user data (from MongoDB)
+            const updatedUser = await User.findById(currentUserId);
+            if (updatedUser) {
+              socket.emit("points-updated", {
+                points: updatedUser.points || updatedUser.totalPoints || 0,
+                totalPoints: updatedUser.totalPoints || updatedUser.points || 0
+              });
+              console.log(`✅ Emitted points update: ${updatedUser.points || updatedUser.totalPoints || 0}`);
+            }
+          }
+
+          console.log(`🗑️ [BACKEND] ========== PROCEEDING WITH DELETION ==========`);
+          console.log(`🗑️ [BACKEND] Message ID: ${messageId}`);
+          console.log(`🗑️ [BACKEND] User ID: ${currentUserId}`);
+          console.log(`🗑️ [BACKEND] Has threshold warning: ${!!thresholdWarning}`);
+          console.log(`🗑️ [BACKEND] Has challenge reversal: ${!!challengeReversal}`);
+          console.log(`🗑️ [BACKEND] Confirmed: ${confirmed}`);
+          
           await Message.findByIdAndDelete(messageId);
-          console.log("Message deleted:", messageId, "by user:", currentUserId);
+          console.log(`✅ [BACKEND] Message deleted: ${messageId} by user: ${currentUserId}`);
 
           // Emit to recipients
           if (isGroupMessage) {
@@ -361,7 +863,9 @@ io.on("connection", (socket) => {
             console.log("Emitted message-deleted to sender:", currentUserId);
           }
         } catch (error) {
-          console.error("Error in delete-message handler:", error);
+          console.error("❌ [BACKEND] Error in delete-message handler:", error);
+          console.error("❌ [BACKEND] Error stack:", error.stack);
+          socket.emit("message-error", { error: "Failed to delete message", details: error.message });
         }
       });
 
@@ -481,35 +985,139 @@ io.on("connection", (socket) => {
       }
 
       const { targetUserId, type, chatId, fromUserId } = data;
-      console.log("Call initiated:", { from: currentUserId, to: targetUserId, type });
-      console.log("User socket map:", userSocketMap);
-
-      // Try to find receiver socket ID - check both string and ObjectId formats
-      const targetUserIdStr = targetUserId.toString();
-      let receiverSocketId = getReceiverSocketId(targetUserIdStr);
+      const currentUserIdStr = String(currentUserId).trim();
+      const targetUserIdStr = String(targetUserId).trim();
       
-      // If not found, try to find by checking all entries
-      if (!receiverSocketId) {
-        for (const [userId, socketId] of Object.entries(userSocketMap)) {
-          if (userId.toString() === targetUserIdStr) {
-            receiverSocketId = socketId;
-            break;
-          }
+      console.log("📞 Call initiated:");
+      console.log("   From:", currentUserIdStr);
+      console.log("   To:", targetUserIdStr);
+      console.log("   Type:", type);
+      console.log("📊 Current userSocketMap:", JSON.stringify(userSocketMap, null, 2));
+      console.log("📊 userSocketMap keys:", Object.keys(userSocketMap));
+      console.log("📊 Looking for targetUserId:", targetUserIdStr);
+      console.log("📊 Target userId type:", typeof targetUserIdStr);
+      console.log("📊 Target userId length:", targetUserIdStr.length);
+      
+      // Check if target user exists in map with different formats
+      for (const [key, value] of Object.entries(userSocketMap)) {
+        console.log(`   Map entry: "${key}" (type: ${typeof key}, length: ${key.length}) → ${value}`);
+        if (String(key).trim() === targetUserIdStr.trim()) {
+          console.log(`   ✅ EXACT MATCH FOUND: "${key}" === "${targetUserIdStr}"`);
         }
       }
 
-      if (receiverSocketId) {
-        const callData = {
-          ...data,
-          fromUserId: currentUserId,
-          targetUserId: targetUserIdStr,
-          callId: `call_${currentUserId}_${targetUserIdStr}_${Date.now()}`,
-        };
-        io.to(receiverSocketId).emit("incoming-call", callData);
-        console.log("Emitted incoming-call to receiver:", targetUserIdStr, "socketId:", receiverSocketId, "callData:", callData);
+      // Prepare call data first
+      const callData = {
+        ...data,
+        fromUserId: currentUserId.toString(),
+        targetUserId: targetUserIdStr,
+        callId: `call_${currentUserId}_${targetUserIdStr}_${Date.now()}`,
+        type: type || "video",
+        chatId: chatId,
+      };
+      
+      // Try to find receiver socket ID
+      let receiverSocketId = getReceiverSocketId(targetUserIdStr);
+      
+      // If still not found, try more aggressive search with multiple formats
+      if (!receiverSocketId) {
+        console.log("⚠️ Socket not found with getReceiverSocketId, trying manual search...");
+        console.log("   Searching for:", targetUserIdStr);
+        console.log("   Available keys:", Object.keys(userSocketMap));
+        console.log("   Full userSocketMap:", JSON.stringify(userSocketMap, null, 2));
+        
+        // Try all possible format variations
+        const searchVariations = [
+          targetUserIdStr,
+          targetUserIdStr.toLowerCase(),
+          targetUserIdStr.toUpperCase(),
+          targetUserIdStr.replace(/^ObjectId\(|\)$/g, '').trim(),
+        ];
+        
+        for (const searchTerm of searchVariations) {
+          for (const [mapUserId, mapSocketId] of Object.entries(userSocketMap)) {
+            const normalizedMapUserId = String(mapUserId).trim();
+            const normalizedSearchTerm = String(searchTerm).trim();
+            
+            // Try exact match
+            if (normalizedMapUserId === normalizedSearchTerm) {
+              receiverSocketId = mapSocketId;
+              console.log("✅ Found socket by exact match:", mapUserId, "→", mapSocketId, "using search term:", searchTerm);
+              break;
+            }
+            
+            // Try case-insensitive match
+            if (normalizedMapUserId.toLowerCase() === normalizedSearchTerm.toLowerCase()) {
+              receiverSocketId = mapSocketId;
+              console.log("✅ Found socket by case-insensitive match:", mapUserId, "→", mapSocketId, "using search term:", searchTerm);
+              break;
+            }
+            
+            // Try partial match (in case of ObjectId wrapper issues)
+            if (normalizedMapUserId.includes(normalizedSearchTerm) || 
+                normalizedSearchTerm.includes(normalizedMapUserId)) {
+              receiverSocketId = mapSocketId;
+              console.log("✅ Found socket by partial match:", mapUserId, "→", mapSocketId, "using search term:", searchTerm);
+              break;
+            }
+          }
+          if (receiverSocketId) break;
+        }
+        
+        // If still not found, wait a bit and retry (socket might be connecting)
+        if (!receiverSocketId) {
+          console.log("⏳ Socket not found, waiting 500ms and retrying...");
+          setTimeout(() => {
+            const retrySocketId = getReceiverSocketId(targetUserIdStr);
+            if (retrySocketId) {
+              console.log("✅ Found socket on retry:", retrySocketId);
+              io.to(retrySocketId).emit("incoming-call", callData);
+              socket.emit("call-sent", { targetUserId: targetUserIdStr, success: true });
+            } else {
+              console.log("❌ Socket still not found after retry, broadcasting...");
+              io.emit("incoming-call", callData);
+              socket.emit("call-error", { message: "User might not be online. Call broadcasted." });
+            }
+          }, 500);
+          return; // Exit early, will handle in setTimeout
+        }
       } else {
-        console.log("Receiver not online for call:", targetUserIdStr, "Available users:", Object.keys(userSocketMap));
-        socket.emit("call-error", { message: "User is not online" });
+        console.log("✅ Found socket via getReceiverSocketId:", receiverSocketId);
+      }
+      
+      console.log("📞 Preparing to emit incoming-call:");
+      console.log("   From:", currentUserId.toString());
+      console.log("   To:", targetUserIdStr);
+      console.log("   Socket ID:", receiverSocketId);
+      console.log("   Call data:", callData);
+      console.log("   Available sockets:", Object.keys(userSocketMap));
+      console.log("   Socket map details:", userSocketMap);
+      
+      if (receiverSocketId) {
+        // Emit to specific receiver
+        io.to(receiverSocketId).emit("incoming-call", callData);
+        console.log("✅ Incoming-call event emitted to receiver socket:", receiverSocketId);
+        
+        // Also confirm to sender that call was sent
+        socket.emit("call-sent", { targetUserId: targetUserIdStr, success: true });
+      } else {
+        console.log("⚠️ Receiver socket not found in userSocketMap");
+        console.log("   Looking for:", targetUserIdStr);
+        console.log("   Available userIds:", Object.keys(userSocketMap));
+        
+        // Try one more time with different format
+        const altReceiverSocketId = getReceiverSocketId(targetUserIdStr);
+        if (altReceiverSocketId) {
+          console.log("✅ Found receiver on retry:", altReceiverSocketId);
+          io.to(altReceiverSocketId).emit("incoming-call", callData);
+          socket.emit("call-sent", { targetUserId: targetUserIdStr, success: true });
+        } else {
+          console.log("❌ Receiver truly not found, trying broadcast...");
+          // Try broadcasting to all connected sockets - receiver might be connecting
+          io.emit("incoming-call", callData);
+          console.log("📢 Broadcasted incoming-call to all connected clients");
+          socket.emit("call-error", { message: "User might not be online. Call broadcasted to all clients." });
+        }
       }
     } catch (error) {
       console.error("Error in call-user handler:", error);
@@ -641,15 +1249,46 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     console.log("A user disconnected", socket.id);
     const currentUserId = userId || socket.handshake.query.userId;
     if (currentUserId) {
-      delete userSocketMap[currentUserId];
+      // Normalize userId to string for consistent removal
+      const normalizedUserId = String(currentUserId).trim();
+      
+      // Remove from socket map
+      if (userSocketMap[normalizedUserId]) {
+        delete userSocketMap[normalizedUserId];
+        console.log("✅ User removed from socket map:", normalizedUserId);
+      } else {
+        // Try to find and remove by checking all entries
+        for (const [mapUserId, mapSocketId] of Object.entries(userSocketMap)) {
+          if (String(mapUserId).trim() === normalizedUserId || mapSocketId === socket.id) {
+            delete userSocketMap[mapUserId];
+            console.log("✅ User removed from socket map (found by search):", mapUserId);
+            break;
+          }
+        }
+      }
+      
+      console.log("📊 Remaining userSocketMap keys:", Object.keys(userSocketMap));
+      
+      // Update user offline status in MongoDB
+      try {
+        await User.findByIdAndUpdate(normalizedUserId, {
+          isOnline: false,
+          lastSeen: new Date()
+        });
+        console.log("✅ Updated user offline status in MongoDB for:", normalizedUserId);
+      } catch (err) {
+        console.error("❌ Error updating user offline status:", err);
+      }
+      
       io.emit("getOnlineUsers", Object.keys(userSocketMap));
-      io.emit("user-offline", currentUserId);
+      io.emit("user-offline", normalizedUserId);
     }
   });
 });
 
 export { io, app, server };
+

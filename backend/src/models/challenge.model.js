@@ -28,8 +28,22 @@ const challengeSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ["chat", "messages", "time", "streak", "custom"],
+      enum: ["chat", "messages", "time", "streak", "custom", "trivia", "puzzle", "quiz", "coding"],
       default: "custom",
+    },
+    // Challenge type specific data
+    challengeData: {
+      // For trivia: { question, options: [], correctAnswer: number, explanation: "" }
+      // For puzzle/riddle: { question, answer: "", hint: "" }
+      // For quiz: { questions: [{ question, options: [], correctAnswer: number }], timeLimit: number }
+      // For coding: { problem: "", starterCode: "", testCases: [], solution: "" }
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    // For timed challenges
+    timeLimit: {
+      type: Number, // in seconds
+      default: null,
     },
     isActive: {
       type: Boolean,

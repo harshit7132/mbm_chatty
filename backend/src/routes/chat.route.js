@@ -86,6 +86,7 @@ router.get("/my-chats", protectRoute, async (req, res) => {
 router.get("/:chatId/messages", protectRoute, async (req, res) => {
   try {
     const { chatId } = req.params;
+    const { after } = req.query; // For syncing new messages
     const myId = req.user._id;
 
     // Extract userId from chatId (format: chat_myId_otherUserId)
@@ -96,12 +97,25 @@ router.get("/:chatId/messages", protectRoute, async (req, res) => {
 
     const otherUserId = parts[1] === myId.toString() ? parts[2] : parts[1];
 
-    const messages = await Message.find({
+    // Build query
+    const query = {
       $or: [
         { senderId: myId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: myId },
       ],
-    })
+    };
+
+    // If 'after' parameter is provided, only get messages after that timestamp
+    if (after) {
+      try {
+        const afterDate = new Date(after);
+        query.createdAt = { $gt: afterDate };
+      } catch (e) {
+        // Invalid date, ignore the after parameter
+      }
+    }
+
+    const messages = await Message.find(query)
       .populate("senderId", "fullName username email profilePic avatar")
       .populate("receiverId", "fullName username email profilePic avatar")
       .populate("replyTo")

@@ -26,11 +26,52 @@ export const signup = async (req, res) => {
       const user = await User.findOne({ email });
       if (user) return res.status(400).json({ message: "Email already exists" });
 
-      const newUser = new User({
-        fullName,
-        email,
-        password: hashedPassword,
-      });
+    // Check for referral code
+    const referralCode = req.body.referralCode || req.query.ref;
+    
+    const newUser = new User({
+      fullName,
+      email,
+      password: hashedPassword,
+    });
+
+    // Don't auto-generate referral code - user will create their own via /api/engagement/referral/create
+
+    // Apply referral if provided
+      if (referralCode) {
+        const referrer = await User.findOne({ referralCode });
+        if (referrer && referrer._id.toString() !== newUser._id.toString()) {
+          newUser.referredBy = referrer._id;
+          
+          // Reward referrer (50 points)
+          const referrerReward = 50;
+          referrer.points = (referrer.points || 0) + referrerReward;
+          referrer.totalPoints = (referrer.totalPoints || 0) + referrerReward;
+          referrer.referralPoints = (referrer.referralPoints || 0) + referrerReward;
+          if (!referrer.referrals) {
+            referrer.referrals = [];
+          }
+          referrer.referrals.push(newUser._id);
+          referrer.pointsHistory.push({
+            type: "earned",
+            amount: referrerReward,
+            description: `Referral reward: ${email}`,
+            timestamp: new Date(),
+          });
+          await referrer.save();
+
+          // Reward new user (25 points)
+          const newUserReward = 25;
+          newUser.points = (newUser.points || 0) + newUserReward;
+          newUser.totalPoints = (newUser.totalPoints || 0) + newUserReward;
+          newUser.pointsHistory = [{
+            type: "earned",
+            amount: newUserReward,
+            description: `Signup with referral code`,
+            timestamp: new Date(),
+          }];
+        }
+      }
 
       generateToken(newUser._id, res);
       await newUser.save();
@@ -47,6 +88,8 @@ export const signup = async (req, res) => {
         badges: newUser.badges || [],
         chatCount: newUser.chatCount || 0,
         isAdmin: newUser.isAdmin || false,
+        canClaimDaily: true, // New users can claim daily reward
+        loginStreak: 1,
       });
     }
 
@@ -66,11 +109,52 @@ export const signup = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Check for referral code
+    const referralCode = req.body.referralCode || req.query.ref;
+    
     const newUser = new User({
       fullName,
       email,
       password: hashedPassword,
     });
+
+    // Don't auto-generate referral code - user will create their own via /api/engagement/referral/create
+
+    // Apply referral if provided
+    if (referralCode) {
+      const referrer = await User.findOne({ referralCode });
+      if (referrer && referrer._id.toString() !== newUser._id.toString()) {
+        newUser.referredBy = referrer._id;
+        
+        // Reward referrer (50 points)
+        const referrerReward = 50;
+        referrer.points = (referrer.points || 0) + referrerReward;
+        referrer.totalPoints = (referrer.totalPoints || 0) + referrerReward;
+        referrer.referralPoints = (referrer.referralPoints || 0) + referrerReward;
+        if (!referrer.referrals) {
+          referrer.referrals = [];
+        }
+        referrer.referrals.push(newUser._id);
+        referrer.pointsHistory.push({
+          type: "earned",
+          amount: referrerReward,
+          description: `Referral reward: ${email}`,
+          timestamp: new Date(),
+        });
+        await referrer.save();
+
+        // Reward new user (25 points)
+        const newUserReward = 25;
+        newUser.points = (newUser.points || 0) + newUserReward;
+        newUser.totalPoints = (newUser.totalPoints || 0) + newUserReward;
+        newUser.pointsHistory = [{
+          type: "earned",
+          amount: newUserReward,
+          description: `Signup with referral code`,
+          timestamp: new Date(),
+        }];
+      }
+    }
 
     if (newUser) {
       // generate jwt token here
@@ -89,6 +173,8 @@ export const signup = async (req, res) => {
         badges: newUser.badges || [],
         chatCount: newUser.chatCount || 0,
         isAdmin: newUser.isAdmin || false,
+        canClaimDaily: true, // New users can claim daily reward
+        loginStreak: 1,
       });
     } else {
       res.status(400).json({ message: "Invalid user data" });
@@ -117,7 +203,16 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // No daily login requirement - activity tracking handles streaks automatically
+    // Just update total logins for statistics
+    user.totalLogins = (user.totalLogins || 0) + 1;
+
     generateToken(user._id, res);
+
+    // Activity tracking is now handled automatically by useActivityTracker hook
+    // No need to track login as activity - user just needs to spend time on site
+    // The activity tracking system will handle streaks automatically
+    await user.save();
 
     res.status(200).json({
       _id: user._id,
@@ -128,6 +223,7 @@ export const login = async (req, res) => {
       badges: user.badges || (user.earlyUserBadge ? [user.earlyUserBadge] : []),
       chatCount: user.chatCount || user.totalChats || 0,
       isAdmin: user.isAdmin || false,
+      consecutiveDaysActive: user.consecutiveDaysActive || 0, // Activity-based streak
     });
   } catch (error) {
     console.log("Error in login controller", error.message);
@@ -325,15 +421,142 @@ export const loginWithOTP = async (req, res) => {
 
     if (!user) {
       // Create new user if doesn't exist (passwordless signup)
+      // Check for referral code
+      const referralCode = req.body.referralCode || req.query.ref;
+      
       user = new User({
         fullName: normalizedEmail.split("@")[0], // Use email prefix as name
         email: normalizedEmail,
         password: await bcrypt.hash("otp-verified-" + Date.now(), 10), // Random password
       });
+
+      // Don't auto-generate referral code - user will create their own
+
+      // Apply referral if provided
+      if (referralCode) {
+        const referrer = await User.findOne({ referralCode });
+        if (referrer && referrer._id.toString() !== user._id.toString()) {
+          user.referredBy = referrer._id;
+          
+          // Reward referrer (50 points)
+          const referrerReward = 50;
+          referrer.points = (referrer.points || 0) + referrerReward;
+          referrer.totalPoints = (referrer.totalPoints || 0) + referrerReward;
+          referrer.referralPoints = (referrer.referralPoints || 0) + referrerReward;
+          if (!referrer.referrals) {
+            referrer.referrals = [];
+          }
+          referrer.referrals.push(user._id);
+          referrer.pointsHistory.push({
+            type: "earned",
+            amount: referrerReward,
+            description: `Referral reward: ${normalizedEmail}`,
+            timestamp: new Date(),
+          });
+          await referrer.save();
+
+          // Reward new user (25 points)
+          const newUserReward = 25;
+          user.points = (user.points || 0) + newUserReward;
+          user.totalPoints = (user.totalPoints || 0) + newUserReward;
+          user.pointsHistory = [{
+            type: "earned",
+            amount: newUserReward,
+            description: `Signup with referral code`,
+            timestamp: new Date(),
+          }];
+        }
+      }
+
       await user.save();
 
       // Send welcome email
       sendWelcomeEmail(normalizedEmail, user.fullName).catch(console.error);
+    } else {
+      // Existing user login - check daily login
+      const todayForOTP = new Date();
+      todayForOTP.setHours(0, 0, 0, 0);
+      const lastLogin = user.lastLoginDate ? new Date(user.lastLoginDate) : null;
+      if (lastLogin) {
+        lastLogin.setHours(0, 0, 0, 0);
+      }
+
+      // No daily login requirement - activity tracking handles streaks automatically
+      // Just update total logins for statistics
+      user.totalLogins = (user.totalLogins || 0) + 1;
+
+      // Track daily activity (login counts as activity)
+      if (!user.dailyActivity) {
+        user.dailyActivity = [];
+      }
+
+      const todayActivityOTP = user.dailyActivity.find(activity => {
+        const activityDate = new Date(activity.date);
+        activityDate.setHours(0, 0, 0, 0);
+        return activityDate.getTime() === todayForOTP.getTime();
+      });
+
+      const wasActiveBeforeOTP = todayActivityOTP?.isActive || false;
+
+      if (todayActivityOTP) {
+        todayActivityOTP.loginTime = new Date();
+        todayActivityOTP.isActive = true;
+        if (todayActivityOTP.activeMinutes < 5) {
+          todayActivityOTP.activeMinutes = 5;
+        }
+      } else {
+        user.dailyActivity.push({
+          date: todayForOTP,
+          loginTime: new Date(),
+          activeMinutes: 5,
+          isActive: true,
+        });
+      }
+
+      // Update consecutiveDaysActive if user became active today
+      if (!wasActiveBeforeOTP) {
+        // Check yesterday's activity
+        const yesterday = new Date(todayForOTP);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        
+        const yesterdayActivity = user.dailyActivity.find(a => {
+          const aDate = new Date(a.date).toISOString().split('T')[0];
+          return aDate === yesterdayStr && a.isActive;
+        });
+        
+        if (yesterdayActivity) {
+          user.consecutiveDaysActive = (user.consecutiveDaysActive || 0) + 1;
+        } else {
+          user.consecutiveDaysActive = 1; // Reset streak
+          user.lastStreakRewardMilestone = 0; // Reset milestone tracking
+        }
+      }
+
+      // Check for 5-day streak milestone reward (5, 10, 15, 20, etc.)
+      const currentStreak = user.consecutiveDaysActive || 0;
+      const lastMilestone = user.lastStreakRewardMilestone || 0;
+      
+      if (currentStreak > 0 && currentStreak % 5 === 0 && currentStreak > lastMilestone) {
+        // User reached a new 5-day milestone (5, 10, 15, 20, etc.)
+        const rewardPoints = 3;
+        user.points = (user.points || 0) + rewardPoints;
+        user.totalPoints = (user.totalPoints || 0) + rewardPoints;
+        user.lastStreakRewardMilestone = currentStreak;
+        
+        // Add to points history
+        if (!user.pointsHistory) {
+          user.pointsHistory = [];
+        }
+        user.pointsHistory.push({
+          type: "earned",
+          amount: rewardPoints,
+          description: `${currentStreak}-day activity streak reward`,
+          timestamp: new Date(),
+        });
+      }
+
+      await user.save();
     }
 
     // Delete used OTP
@@ -351,6 +574,7 @@ export const loginWithOTP = async (req, res) => {
       badges: user.badges || (user.earlyUserBadge ? [user.earlyUserBadge] : []),
       chatCount: user.chatCount || user.totalChats || 0,
       isAdmin: user.isAdmin || false,
+      consecutiveDaysActive: user.consecutiveDaysActive || 0, // Activity-based streak
     });
   } catch (error) {
     console.log("Error in loginWithOTP controller:", error.message);

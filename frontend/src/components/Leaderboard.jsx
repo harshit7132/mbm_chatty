@@ -1,23 +1,54 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useLeaderboardStore } from "../store/useLeaderboardStore";
-import { Trophy, Medal, Award, Coins } from "lucide-react";
+import { Trophy, Medal, Award, Coins, Target, ChevronLeft, ChevronRight } from "lucide-react";
 
 const LEADERBOARD_TYPES = [
   { key: "badges", label: "Badges", icon: Trophy },
   { key: "chats", label: "Chats", icon: Medal },
   { key: "points-earned", label: "Points Earned", icon: Award },
   { key: "points-spent", label: "Points Spent", icon: Coins },
+  { key: "challenges-completed", label: "Challenges Completed", icon: Target },
 ];
+
+const ITEMS_PER_PAGE = 50;
 
 const Leaderboard = () => {
   const { leaderboards, getLeaderboard, isLeaderboardsLoading } = useLeaderboardStore();
   const [activeTab, setActiveTab] = useState("badges");
+  const [currentPage, setCurrentPage] = useState(1);
 
+  // Fetch leaderboard data when tab changes
   useEffect(() => {
-    getLeaderboard(activeTab);
+    console.log('Fetching leaderboard for tab:', activeTab);
+    getLeaderboard(activeTab).then(data => {
+      console.log(`Fetched ${data.length} entries for ${activeTab} leaderboard`);
+      setCurrentPage(1); // Reset to first page when changing tabs
+    });
   }, [activeTab, getLeaderboard]);
 
-  const currentLeaderboard = leaderboards[activeTab] || [];
+  const currentLeaderboard = useMemo(() => {
+    const data = leaderboards[activeTab] || [];
+    console.log(`Current leaderboard (${activeTab}) has ${data.length} entries`);
+    return data;
+  }, [leaderboards, activeTab]);
+  
+  // Calculate pagination
+  const totalPages = Math.max(1, Math.ceil(currentLeaderboard.length / ITEMS_PER_PAGE));
+  const paginatedLeaderboard = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    const pageData = currentLeaderboard.slice(startIndex, endIndex);
+    console.log(`Page ${currentPage}: Showing items ${startIndex + 1} to ${Math.min(endIndex, currentLeaderboard.length)} of ${currentLeaderboard.length}`);
+    return pageData;
+  }, [currentLeaderboard, currentPage]);
+
+  const handlePrevPage = () => {
+    setCurrentPage(prev => Math.max(1, prev - 1));
+  };
+
+  const handleNextPage = () => {
+    setCurrentPage(prev => Math.min(totalPages, prev + 1));
+  };
 
   const getRankIcon = (rank) => {
     if (rank === 1) return "🥇";
@@ -25,7 +56,7 @@ const Leaderboard = () => {
     if (rank === 3) return "🥉";
     return `#${rank}`;
   };
-
+  
   const getValue = (user, type) => {
     // Backend returns 'score' field for all types
     if (user.score !== undefined) {
@@ -78,18 +109,22 @@ const Leaderboard = () => {
               </tr>
             </thead>
             <tbody>
-              {currentLeaderboard.length === 0 ? (
+              {paginatedLeaderboard.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="text-center py-8 text-base-content/70">
                     No data available
                   </td>
                 </tr>
               ) : (
-                currentLeaderboard.map((user, index) => (
+                paginatedLeaderboard.map((user, index) => {
+                  const globalIndex = (currentPage - 1) * ITEMS_PER_PAGE + index;
+                  console.log(`Rendering user ${globalIndex + 1}:`, user.fullName || user.username);
+                  return (
                   <tr key={user._id} className="hover">
                     <td>
                       <div className="flex items-center gap-2">
-                        <span className="text-lg">{getRankIcon(index + 1)}</span>
+                        <span className="text-lg">{getRankIcon(globalIndex + 1)}</span>
+                        {/* <span className="text-sm opacity-70">{globalIndex + 1}</span> */}
                       </div>
                     </td>
                     <td>
@@ -123,10 +158,33 @@ const Leaderboard = () => {
                       <span className="font-semibold">{getValue(user, activeTab)}</span>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
+          
+          {totalPages > 1 && (
+            <div className="flex justify-center items-center gap-4 mt-4">
+              <button 
+                onClick={handlePrevPage}
+                disabled={currentPage === 1}
+                className="btn btn-sm btn-ghost"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span className="text-sm">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button 
+                onClick={handleNextPage}
+                disabled={currentPage === totalPages}
+                className="btn btn-sm btn-ghost"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

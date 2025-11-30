@@ -23,8 +23,42 @@ const ChatContainer = () => {
 
   useEffect(() => {
     if (selectedChat) {
-      getMessages(selectedChat._id);
-      subscribeToMessages();
+      // First, ensure socket is connected
+      const { socket } = useAuthStore.getState();
+      if (socket && socket.connected) {
+        getMessages(selectedChat._id);
+        subscribeToMessages();
+      } else if (socket) {
+        // Wait for socket to connect
+        console.log("⏳ Waiting for socket connection...");
+        const onConnect = () => {
+          console.log("✅ Socket connected, subscribing to messages");
+          getMessages(selectedChat._id);
+          subscribeToMessages();
+          socket.off("connect", onConnect);
+        };
+        socket.on("connect", onConnect);
+        
+        return () => {
+          socket.off("connect", onConnect);
+          unsubscribeFromMessages();
+        };
+      } else {
+        console.error("❌ Socket not available");
+      }
+      
+      // Set up periodic message sync from MongoDB (every 5 seconds as fallback)
+      const syncInterval = setInterval(() => {
+        const { selectedChat } = useChatStore.getState();
+        if (selectedChat && selectedChat._id) {
+          useChatStore.getState().syncMessages();
+        }
+      }, 5000); // Sync every 5 seconds
+      
+      return () => {
+        unsubscribeFromMessages();
+        clearInterval(syncInterval);
+      };
     }
 
     return () => unsubscribeFromMessages();
@@ -51,9 +85,9 @@ const ChatContainer = () => {
       <ChatHeader />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
+        {messages.map((message, index) => (
           <MessageBubble
-            key={message._id}
+            key={message._id || `msg-${index}-${message.createdAt || Date.now()}`}
             message={message}
             selectedUser={selectedUser}
           />

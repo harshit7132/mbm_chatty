@@ -301,17 +301,43 @@ router.post("/reject-request/:userId", protectRoute, async (req, res) => {
 router.get("/requests", protectRoute, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
-      .populate("friendRequests.from", "fullName username email profilePic avatar")
+      .populate({
+        path: "friendRequests.from",
+        select: "fullName username email profilePic avatar",
+        strictPopulate: false // Don't throw error if from is null or invalid
+      })
       .select("friendRequests");
 
-    const pendingRequests = user?.friendRequests?.filter(
-      r => r.status === "pending"
-    ) || [];
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-    res.status(200).json({ requests: pendingRequests });
+    // Filter pending requests and handle null/undefined from references
+    const pendingRequests = (user.friendRequests || []).filter(r => {
+      // Only include requests with valid from reference and pending status
+      return r && r.status === "pending" && r.from;
+    });
+
+    // Convert to plain objects to avoid serialization issues
+    const response = pendingRequests.map(r => {
+      try {
+        return r.toObject ? r.toObject() : r;
+      } catch (err) {
+        console.error("Error converting friend request to object:", err);
+        return null;
+      }
+    }).filter(r => r !== null);
+
+    res.status(200).json({ requests: response });
   } catch (error) {
-    console.log("Error in getFriendRequests:", error.message);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("❌ [ERROR] Error in getFriendRequests:", error);
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+    res.status(500).json({ 
+      message: "Internal Server Error",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined
+    });
   }
 });
 

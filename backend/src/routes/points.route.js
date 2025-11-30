@@ -65,10 +65,12 @@ router.post("/spend", protectRoute, async (req, res) => {
     }
 
     user.points = currentPoints - amount;
+    user.pointsSpent = (user.pointsSpent || 0) + amount; // Update pointsSpent for leaderboard
     user.pointsHistory = user.pointsHistory || [];
     user.pointsHistory.push({
       type: "spent",
       amount: -amount,
+      description: `Spent ${amount} points`,
       timestamp: new Date(),
     });
     await user.save();

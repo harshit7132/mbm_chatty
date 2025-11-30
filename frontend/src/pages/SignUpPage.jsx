@@ -1,22 +1,32 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuthStore } from "../store/useAuthStore";
 import { useOTPStore } from "../store/useOTPStore";
-import { Eye, EyeOff, Loader2, Lock, Mail, MessageSquare, User, Smartphone } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Eye, EyeOff, Loader2, Lock, Mail, MessageSquare, User, Smartphone, Gift } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import AuthImagePattern from "../components/AuthImagePattern";
 import toast from "react-hot-toast";
 
 const SignUpPage = () => {
+  const [searchParams] = useSearchParams();
   const [showPassword, setShowPassword] = useState(false);
   const [useOTP, setUseOTP] = useState(false);
   const [otp, setOtp] = useState("");
   const [otpVerified, setOtpVerified] = useState(false);
+  const [referralCode, setReferralCode] = useState("");
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
     password: "",
   });
+
+  // Get referral code from URL if present
+  useEffect(() => {
+    const refFromUrl = searchParams.get("ref");
+    if (refFromUrl) {
+      setReferralCode(refFromUrl);
+    }
+  }, [searchParams]);
 
   const { signup, isSigningUp } = useAuthStore();
   const { sendOTP, verifyOTP, otpSent, isSendingOTP, isVerifyingOTP, resetOTP } = useOTPStore();
@@ -74,11 +84,16 @@ const SignUpPage = () => {
 
     if (success === true) {
       try {
+        const signupData = {
+          ...formData,
+          referralCode: referralCode.trim() || undefined, // Only include if not empty
+        };
+        
         if (useOTP) {
           // Signup with OTP (no password required)
-          await signup({ ...formData, password: "otp-verified", otp });
+          await signup({ ...signupData, password: "otp-verified", otp });
         } else {
-          await signup(formData);
+          await signup(signupData);
         }
       } catch (error) {
         // Error is already handled in signup function with toast
@@ -142,6 +157,32 @@ const SignUpPage = () => {
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 />
               </div>
+            </div>
+
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text font-medium">Referral Code (Optional)</span>
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Gift className="size-5 text-base-content/40" />
+                </div>
+                <input
+                  type="text"
+                  className="input input-bordered w-full pl-10"
+                  placeholder="Enter referral code (optional)"
+                  value={referralCode}
+                  onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                  maxLength={20}
+                />
+              </div>
+              {referralCode && (
+                <label className="label">
+                  <span className="label-text-alt text-success">
+                    ✓ You'll get 25 bonus points when you sign up with this code!
+                  </span>
+                </label>
+              )}
             </div>
 
             {!useOTP ? (

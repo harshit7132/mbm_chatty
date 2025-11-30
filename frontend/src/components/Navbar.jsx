@@ -11,6 +11,7 @@ import {
   Target,
   Shield,
   Bot,
+  Calendar,
 } from "lucide-react";
 
 const Navbar = () => {
@@ -47,6 +48,10 @@ const Navbar = () => {
                 <Link to="/challenges" className="btn btn-sm btn-ghost" title="Challenges">
                   <Target className="w-4 h-4" />
                   <span className="hidden sm:inline">Challenges</span>
+                </Link>
+                <Link to="/calendar" className="btn btn-sm btn-ghost" title="Calendar">
+                  <Calendar className="w-4 h-4" />
+                  <span className="hidden sm:inline">Calendar</span>
                 </Link>
                 <Link to="/groups" className="btn btn-sm btn-ghost" title="Groups">
                   <MessageSquare className="w-4 h-4" />

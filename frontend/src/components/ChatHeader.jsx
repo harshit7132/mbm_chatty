@@ -23,6 +23,19 @@ const ChatHeader = () => {
   const handleVideoCall = async () => {
     if (!selectedChat || !selectedUser) return;
     
+    // Check if there's already an incoming call - if so, don't allow new call
+    const { incomingCall, activeCall } = useCallStore.getState();
+    if (incomingCall) {
+      toast.error("Please answer or reject the incoming call first");
+      return;
+    }
+    
+    // Check if there's already an active call
+    if (activeCall) {
+      toast.error("You are already in a call");
+      return;
+    }
+    
     // Check if user is online
     if (!onlineUsers.includes(selectedUser._id)) {
       setCallType("video");

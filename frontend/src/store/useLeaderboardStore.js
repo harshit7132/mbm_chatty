@@ -8,22 +8,32 @@ export const useLeaderboardStore = create((set, get) => ({
     chats: [],
     "points-earned": [],
     "points-spent": [],
+    "challenges-completed": [],
   },
   isLeaderboardsLoading: false,
 
   getLeaderboard: async (type) => {
     set({ isLeaderboardsLoading: true });
     try {
+      console.log(`Fetching leaderboard for type: ${type}`);
       const res = await axiosInstance.get(`/leaderboard/${type}`);
+      console.log(`Received ${res.data?.length || 0} entries for ${type} leaderboard`);
+      
+      // Ensure we have valid data
+      const leaderboardData = Array.isArray(res.data) ? res.data : [];
+      
       set({
         leaderboards: {
           ...get().leaderboards,
-          [type]: res.data,
+          [type]: leaderboardData,
         },
       });
-      return res.data;
+      
+      console.log(`Successfully updated ${type} leaderboard with ${leaderboardData.length} entries`);
+      return leaderboardData;
     } catch (error) {
-      toast.error(error.response?.data?.message || "Failed to fetch leaderboard");
+      console.error(`Error fetching ${type} leaderboard:`, error);
+      toast.error(error.response?.data?.message || `Failed to fetch ${type} leaderboard`);
       return [];
     } finally {
       set({ isLeaderboardsLoading: false });
@@ -33,11 +43,12 @@ export const useLeaderboardStore = create((set, get) => ({
   getAllLeaderboards: async () => {
     set({ isLeaderboardsLoading: true });
     try {
-      const [badges, chats, pointsEarned, pointsSpent] = await Promise.all([
+      const [badges, chats, pointsEarned, pointsSpent, challengesCompleted] = await Promise.all([
         axiosInstance.get("/leaderboard/badges"),
         axiosInstance.get("/leaderboard/chats"),
         axiosInstance.get("/leaderboard/points-earned"),
         axiosInstance.get("/leaderboard/points-spent"),
+        axiosInstance.get("/leaderboard/challenges-completed"),
       ]);
 
       set({
@@ -46,6 +57,7 @@ export const useLeaderboardStore = create((set, get) => ({
           chats: chats.data,
           "points-earned": pointsEarned.data,
           "points-spent": pointsSpent.data,
+          "challenges-completed": challengesCompleted.data,
         },
       });
     } catch (error) {

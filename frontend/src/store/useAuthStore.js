@@ -3,6 +3,8 @@ import { axiosInstance } from "../lib/axios.js";
 import toast from "react-hot-toast";
 import { io } from "socket.io-client";
 import { useCallStore } from "./useCallStore";
+import { useChatStore } from "./useChatStore";
+import { useChallengeStore } from "./useChallengeStore";
 
 // In development, use HTTP for socket.io (WebSocket connections)
 // Browsers allow WebSocket connections from HTTPS to HTTP on localhost
@@ -17,12 +19,14 @@ export const useAuthStore = create((set, get) => ({
   isCheckingAuth: true,
   onlineUsers: [],
   socket: null,
+  onlineUsersSyncInterval: null,
 
   checkAuth: async () => {
     try {
       const res = await axiosInstance.get("/auth/check");
       set({ authUser: res.data });
       get().connectSocket();
+      get().fetchOnlineUsers(); // Fetch online users from MongoDB
     } catch (error) {
       // 404 or 401 means user is not authenticated - this is normal
       if (error.response?.status === 404 || error.response?.status === 401) {
@@ -34,6 +38,27 @@ export const useAuthStore = create((set, get) => ({
       }
     } finally {
       set({ isCheckingAuth: false });
+    }
+  },
+
+  // Refresh auth user data (useful after points changes)
+  refreshAuthUser: async () => {
+    try {
+      const res = await axiosInstance.get("/auth/check");
+      set({ authUser: res.data });
+    } catch (error) {
+      console.error("Error refreshing auth user:", error);
+    }
+  },
+
+  // Fetch online users from MongoDB
+  fetchOnlineUsers: async () => {
+    try {
+      const res = await axiosInstance.get("/auth/online-users");
+      set({ onlineUsers: res.data.onlineUsers || [] });
+      console.log("✅ Fetched online users from MongoDB:", res.data.onlineUsers.length);
+    } catch (error) {
+      console.error("❌ Error fetching online users:", error);
     }
   },
 
@@ -135,9 +160,32 @@ export const useAuthStore = create((set, get) => ({
     });
 
     newSocket.on("connect", () => {
-      console.log("Socket connected:", newSocket.id, "userId:", authUser._id);
+      console.log("✅ Socket connected:", newSocket.id, "userId:", authUser._id);
       newSocket.emit("join", { userId: authUser._id });
+      
+      // Set up socket listeners immediately after connection
       get().setupSocketListeners(newSocket);
+      
+      // Re-subscribe to messages if there's an active chat
+      const { selectedChat } = useChatStore.getState();
+      if (selectedChat) {
+        console.log("🔄 Re-subscribing to messages after socket reconnect");
+        setTimeout(() => {
+          useChatStore.getState().subscribeToMessages();
+        }, 500);
+      }
+      
+      // Fetch online users from MongoDB after connecting
+      get().fetchOnlineUsers();
+      
+      // Set up periodic sync with MongoDB (every 30 seconds)
+      if (get().onlineUsersSyncInterval) {
+        clearInterval(get().onlineUsersSyncInterval);
+      }
+      const interval = setInterval(() => {
+        get().fetchOnlineUsers();
+      }, 30000); // Sync every 30 seconds
+      set({ onlineUsersSyncInterval: interval });
     });
 
     newSocket.on("disconnect", (reason) => {
@@ -167,6 +215,11 @@ export const useAuthStore = create((set, get) => ({
   },
 
   setupSocketListeners: (socket) => {
+    if (!socket) {
+      console.error("❌ Cannot setup socket listeners - socket is null");
+      return;
+    }
+    
     // Remove existing listeners to prevent duplicates
     socket.off("getOnlineUsers");
     socket.off("user-online");
@@ -175,19 +228,64 @@ export const useAuthStore = create((set, get) => ({
     socket.off("incoming-call");
     socket.off("call-answered");
     socket.off("call-ended");
+    socket.off("call-error");
+    socket.off("call-sent");
+    socket.off("challenge-updated");
+    socket.off("challenge-reversed");
+    
+    console.log("✅ Setting up socket listeners for socket:", socket.id);
+    
+    // Initialize challenge socket listener for real-time updates
+    try {
+      useChallengeStore.getState().initSocketListener(socket);
+    } catch (error) {
+      console.error("Error initializing challenge socket listener:", error);
+    }
+    
+    // Initialize delete warning listeners globally (not just in subscribeToMessages)
+    // Remove existing listeners to prevent duplicates
+    socket.off("delete-warning");
+    socket.off("delete-threshold-warning");
+    
+    // Set up delete warning listeners
+    socket.on("delete-warning", (data) => {
+      console.log("⚠️ [GLOBAL] Delete warning received:", data);
+      console.log("⚠️ [GLOBAL] Setting pendingDeletion in store...");
+      useChatStore.getState().setPendingDeletion(data);
+      console.log("⚠️ [GLOBAL] pendingDeletion set:", useChatStore.getState().pendingDeletion);
+    });
+    
+    socket.on("delete-threshold-warning", (data) => {
+      console.log("⚠️ [GLOBAL] Threshold warning received:", data);
+      console.log("⚠️ [GLOBAL] Setting thresholdWarning in store...");
+      useChatStore.getState().setThresholdWarning(data);
+      console.log("⚠️ [GLOBAL] thresholdWarning set:", useChatStore.getState().thresholdWarning);
+    });
+    
+    console.log("✅ Global delete warning listeners initialized");
 
     socket.on("getOnlineUsers", (userIds) => {
-      set({ onlineUsers: userIds });
+      // Merge socket online users with MongoDB online users
+      get().fetchOnlineUsers().then(() => {
+        const mongoUsers = get().onlineUsers;
+        const allUsers = [...new Set([...userIds, ...mongoUsers])];
+        set({ onlineUsers: allUsers });
+      });
     });
 
     socket.on("user-online", (userId) => {
-      if (!get().onlineUsers.includes(userId)) {
-        set({ onlineUsers: [...get().onlineUsers, userId] });
+      const currentUsers = get().onlineUsers;
+      if (!currentUsers.includes(userId)) {
+        set({ onlineUsers: [...currentUsers, userId] });
       }
+      // Also sync with MongoDB
+      get().fetchOnlineUsers();
     });
 
     socket.on("user-offline", (userId) => {
       set({ onlineUsers: get().onlineUsers.filter((id) => id !== userId) });
+      // Also sync with MongoDB
+      get().fetchOnlineUsers();
     });
 
     socket.on("points-earned", (data) => {
@@ -195,8 +293,100 @@ export const useAuthStore = create((set, get) => ({
     });
 
     socket.on("incoming-call", (callData) => {
-      console.log("Received incoming-call event:", callData);
-      useCallStore.getState().setIncomingCall(callData);
+      console.log("📞 Received incoming-call event:", callData);
+      console.log("📞 Current authUser:", get().authUser?._id);
+      
+      const currentUserId = get().authUser?._id?.toString();
+      
+      if (!currentUserId) {
+        console.error("❌ No current user ID, cannot process incoming call");
+        return;
+      }
+      
+      // When receiving an incoming call:
+      // - fromUserId = the person calling (caller)
+      // - targetUserId = the person receiving (should be current user)
+      const fromUserId = callData.fromUserId?.toString()?.trim();
+      const targetUserId = callData.targetUserId?.toString()?.trim();
+      const currentUserIdTrimmed = String(currentUserId).trim();
+      
+      console.log("📞 Call comparison:");
+      console.log("   fromUserId:", fromUserId, "(type:", typeof fromUserId, ")");
+      console.log("   currentUserId:", currentUserIdTrimmed, "(type:", typeof currentUserIdTrimmed, ")");
+      console.log("   targetUserId:", targetUserId);
+      
+      // Ignore calls from ourselves - but be more lenient with format comparison
+      const fromUserIdNormalized = fromUserId ? String(fromUserId).trim().toLowerCase() : null;
+      const currentUserIdNormalized = currentUserIdTrimmed.toLowerCase();
+      
+      if (fromUserIdNormalized && fromUserIdNormalized === currentUserIdNormalized) {
+        console.log("⚠️ Ignoring call from ourselves (normalized match)");
+        console.log("   fromUserId:", fromUserIdNormalized);
+        console.log("   currentUserId:", currentUserIdNormalized);
+        return;
+      }
+      
+      // Check if this call is for us
+      // Accept if:
+      // 1. targetUserId matches currentUserId (call is for us), OR
+      // 2. targetUserId doesn't match but fromUserId is different (might be broadcast or format issue)
+      // 3. No targetUserId (broadcast) - accept if fromUserId is different
+      const isTargetMatch = targetUserId && (
+        targetUserId === currentUserId || 
+        targetUserId.toString() === currentUserId.toString() ||
+        String(targetUserId).trim() === String(currentUserId).trim()
+      );
+      
+      const isBroadcast = !targetUserId || !isTargetMatch;
+      
+      // Always accept if it's from someone else (even if broadcast)
+      if (isBroadcast && fromUserId && fromUserId !== currentUserId) {
+        console.log("📢 Incoming call appears to be broadcast or format mismatch");
+        console.log("   Call target:", targetUserId, "Current user:", currentUserId);
+        console.log("   Call from:", fromUserId);
+        console.log("   ✅ Accepting call (broadcast or format issue, but from different user)");
+      } else if (!isBroadcast) {
+        console.log("✅ Incoming call target matches current user");
+      } else {
+        console.log("⚠️ Incoming call rejected - from self or invalid");
+        return;
+      }
+      
+      // Ensure we have the call data with all required fields
+      const fullCallData = {
+        ...callData,
+        isIncoming: true,
+        fromUserId: fromUserId || callData.from?.toString() || callData.fromUserId,
+        targetUserId: targetUserId || currentUserId, // If no targetUserId, assume it's for us
+        type: callData.type || "video",
+        chatId: callData.chatId,
+        callId: callData.callId || `call_${fromUserId}_${currentUserId}_${Date.now()}`,
+      };
+      
+      console.log("📞 Setting incoming call with full data:", fullCallData);
+      console.log("📞 Current incomingCall state before:", useCallStore.getState().incomingCall);
+      
+      // Set the incoming call
+      useCallStore.getState().setIncomingCall(fullCallData);
+      
+      // Verify it was set
+      const newState = useCallStore.getState().incomingCall;
+      console.log("📞 Incoming call state after setting:", newState);
+      
+      if (!newState) {
+        console.error("❌ Failed to set incoming call! Retrying...");
+        setTimeout(() => {
+          useCallStore.getState().setIncomingCall(fullCallData);
+          console.log("📞 Retried setting incoming call:", useCallStore.getState().incomingCall);
+        }, 100);
+      } else {
+        console.log("✅ Incoming call set successfully");
+      }
+    });
+
+    socket.on("call-error", (errorData) => {
+      console.error("📞 Call error:", errorData);
+      toast.error(errorData.message || "Call failed");
     });
 
     socket.on("call-answered", (data) => {
@@ -229,5 +419,10 @@ export const useAuthStore = create((set, get) => ({
   },
   disconnectSocket: () => {
     if (get().socket?.connected) get().socket.disconnect();
+    // Clear online users sync interval
+    if (get().onlineUsersSyncInterval) {
+      clearInterval(get().onlineUsersSyncInterval);
+      set({ onlineUsersSyncInterval: null });
+    }
   },
 }));

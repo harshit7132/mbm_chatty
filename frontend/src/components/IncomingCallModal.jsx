@@ -6,10 +6,19 @@ import { useState } from "react";
 
 const IncomingCallModal = ({ callData, onAnswer, onReject }) => {
   const { authUser } = useAuthStore();
-  const { selectedUser } = useChatStore();
+  const { selectedUser, users } = useChatStore();
   const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
 
-  if (!callData) return null;
+  // Find the caller user from users list if selectedUser is not set
+  const callerUser = selectedUser || users.find(u => u._id === callData?.fromUserId);
+
+  console.log("📞 IncomingCallModal rendered with callData:", callData);
+  console.log("📞 Caller user:", callerUser);
+
+  if (!callData) {
+    console.log("⚠️ IncomingCallModal: No callData, returning null");
+    return null;
+  }
 
   const handleAnswer = async () => {
     // Check if we're in a secure context (HTTPS or localhost)
@@ -119,13 +128,13 @@ const IncomingCallModal = ({ callData, onAnswer, onReject }) => {
           <div className="avatar mx-auto">
             <div className="w-24 rounded-full">
               <img
-                src={selectedUser?.profilePic || "/avatar.png"}
-                alt={selectedUser?.fullName || "User"}
+                src={callerUser?.profilePic || callerUser?.avatar || "/avatar.png"}
+                alt={callerUser?.fullName || callerUser?.username || "User"}
               />
             </div>
           </div>
           <h3 className="text-2xl font-bold">
-            {selectedUser?.fullName || "Incoming Call"}
+            {callerUser?.fullName || callerUser?.username || "Incoming Call"}
           </h3>
           <p className="text-base-content/70">
             {callData.type === "video" ? "Video" : "Voice"} Call

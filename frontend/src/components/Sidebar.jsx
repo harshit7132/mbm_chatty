@@ -1,25 +1,64 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { useGroupStore } from "../store/useGroupStore";
 import { useAuthStore } from "../store/useAuthStore";
+import { useLeaderboardStore } from "../store/useLeaderboardStore";
 import SidebarSkeleton from "./skeletons/SidebarSkeleton";
 import UserSearch from "./UserSearch";
-import { Users, Search, MessageSquare } from "lucide-react";
+import { Users, Search, MessageSquare, Trophy } from "lucide-react";
+
+// Helper to get rank badge with color based on position
+const getRankBadge = (rank) => {
+  if (!rank) return null;
+  
+  const number = String(rank).padStart(3, '0');
+  
+  // Different colors for top 3 positions
+  if (rank === 1) return { text: number, color: "text-yellow-400" };
+  if (rank === 2) return { text: number, color: "text-gray-300" };
+  if (rank === 3) return { text: number, color: "text-amber-600" };
+  
+  return { 
+    text: number, 
+    color: "text-base-content/70" 
+  };
+};
 
 const Sidebar = () => {
-  const { getUsers, users, selectedUser, setSelectedUser, isUsersLoading } = useChatStore();
+  const { 
+    getUsers, 
+    users, 
+    selectedUser, 
+    setSelectedUser, 
+    isUsersLoading 
+  } = useChatStore();
+  
   const { groups, getMyGroups, selectedGroup, setSelectedGroup } = useGroupStore();
   const { onlineUsers } = useAuthStore();
+  const { leaderboards, getLeaderboard } = useLeaderboardStore();
+  
+  // Create a map of user IDs to their rank in the badges leaderboard
+  const userBadgeRanks = useMemo(() => {
+    const ranks = {};
+    leaderboards.badges?.forEach((user, index) => {
+      if (user?._id) {
+        ranks[user._id] = index + 1; // 1-based rank
+      }
+    });
+    return ranks;
+  }, [leaderboards.badges]);
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
   const [activeTab, setActiveTab] = useState("users");
   const [showSearch, setShowSearch] = useState(false);
 
+  // Fetch initial data
   useEffect(() => {
     getUsers();
+    getLeaderboard('badges'); // Load badges leaderboard
     if (activeTab === "groups") {
       getMyGroups();
     }
-  }, [getUsers, getMyGroups, activeTab]);
+  }, [getUsers, getMyGroups, activeTab, getLeaderboard]);
 
   const filteredUsers = showOnlineOnly
     ? users.filter((user) => onlineUsers.includes(user._id))
@@ -105,7 +144,7 @@ const Sidebar = () => {
       <div className="overflow-y-auto w-full py-3">
         {activeTab === "users" ? (
           <>
-            {filteredUsers.map((user) => (
+            {filteredUsers.map((user, index) => (
               <button
                 key={user._id}
                 onClick={() => setSelectedUser(user)}
@@ -129,8 +168,20 @@ const Sidebar = () => {
                   )}
                 </div>
 
-                <div className="hidden lg:block text-left min-w-0">
-                  <div className="font-medium truncate">{user.fullName}</div>
+                <div className="hidden lg:block text-left min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="font-medium truncate">{user.fullName}</div>
+                    {userBadgeRanks[user._id] && (
+                      <div className="flex items-center gap-1" title={`Rank #${userBadgeRanks[user._id]} in badges leaderboard`}>
+                        <Trophy size={14} className="text-yellow-400" />
+                        <span 
+                          className={`text-xs font-mono font-medium ${getRankBadge(userBadgeRanks[user._id]).color}`}
+                        >
+                          {getRankBadge(userBadgeRanks[user._id]).text}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                   <div className="text-sm text-zinc-400">
                     {onlineUsers.includes(user._id) ? "Online" : "Offline"}
                   </div>

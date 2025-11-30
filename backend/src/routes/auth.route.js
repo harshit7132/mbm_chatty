@@ -29,6 +29,25 @@ router.put("/update-profile", protectRoute, updateProfile);
 
 router.get("/check", protectRoute, checkAuth);
 
+// Get online users from MongoDB
+router.get("/online-users", protectRoute, async (req, res) => {
+  try {
+    // Get all users who are online (isOnline: true and lastSeen within last 5 minutes)
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const onlineUsers = await User.find({
+      isOnline: true,
+      lastSeen: { $gte: fiveMinutesAgo }
+    }).select("_id");
+    
+    const onlineUserIds = onlineUsers.map(user => user._id.toString());
+    
+    res.status(200).json({ onlineUsers: onlineUserIds });
+  } catch (error) {
+    console.log("Error in getOnlineUsers:", error.message);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
 // User search route - Returns all users (for finding new friends)
 router.get("/search-all", protectRoute, async (req, res) => {
   try {

@@ -39,20 +39,37 @@ const SecurityFeatures = () => {
 
     // Add watermark
     const addWatermark = () => {
+      // Remove existing watermark if it exists
+      const existingWatermark = document.getElementById("security-watermark");
+      if (existingWatermark) {
+        existingWatermark.remove();
+      }
+
       const watermark = document.createElement("div");
       watermark.id = "security-watermark";
       watermark.style.cssText = `
-        position: fixed;
-        bottom: 10px;
-        right: 10px;
+        position: fixed !important;
+        bottom: 10px !important;
+        right: 10px !important;
         opacity: 0.3;
         font-size: 12px;
         color: #999;
         pointer-events: none;
-        z-index: 9999;
+        z-index: 99999 !important;
+        transform: translateZ(0);
+        will-change: transform;
       `;
       watermark.textContent = `Chatty App - ${new Date().toLocaleDateString()}`;
+      
+      // Append to body to ensure it's not affected by page containers
       document.body.appendChild(watermark);
+      
+      // Ensure body and html don't have overflow that could affect fixed positioning
+      const body = document.body;
+      const html = document.documentElement;
+      if (!body.style.position) {
+        body.style.position = 'relative';
+      }
     };
 
     // Disable photo capture on mobile

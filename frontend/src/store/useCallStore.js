@@ -5,8 +5,19 @@ export const useCallStore = create((set, get) => ({
   activeCall: null,
   incomingCall: null,
 
-  setActiveCall: (callData) => set({ activeCall: callData }),
-  setIncomingCall: (callData) => set({ incomingCall: callData }),
+  setActiveCall: (callData) => {
+    console.log("📞 Setting active call:", callData);
+    set({ activeCall: callData });
+  },
+  setIncomingCall: (callData) => {
+    console.log("📞 [useCallStore] Setting incoming call:", callData);
+    if (!callData) {
+      console.warn("⚠️ [useCallStore] Attempted to set null/undefined incoming call");
+      return;
+    }
+    set({ incomingCall: callData });
+    console.log("✅ [useCallStore] Incoming call state updated:", get().incomingCall);
+  },
   clearCall: () => set({ activeCall: null, incomingCall: null }),
 
   answerCall: async () => {
