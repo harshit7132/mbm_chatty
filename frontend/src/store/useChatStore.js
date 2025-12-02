@@ -215,8 +215,30 @@ export const useChatStore = create((set, get) => ({
   },
 
   sendMessage: async (messageData) => {
-    const { selectedChat, authUser } = get();
-    if (!selectedChat) {
+    const { selectedChat } = get();
+    
+    // Check if we have a selectedGroup from useGroupStore
+    let selectedGroup = null;
+    try {
+      const { useGroupStore } = await import("./useGroupStore");
+      selectedGroup = useGroupStore.getState().selectedGroup;
+    } catch (error) {
+      console.error("Error getting selectedGroup:", error);
+    }
+    
+    // If no selectedChat but we have a selectedGroup, set it up
+    let activeChat = selectedChat;
+    if (!activeChat && selectedGroup) {
+      const groupChatData = {
+        _id: `group_${selectedGroup._id}`,
+        type: "group",
+        groupId: selectedGroup._id,
+      };
+      set({ selectedChat: groupChatData });
+      activeChat = groupChatData;
+    }
+    
+    if (!activeChat) {
       toast.error("Please select a chat to send message");
       return;
     }
@@ -232,21 +254,22 @@ export const useChatStore = create((set, get) => ({
 
       // Add groupId if it's a group chat
       const messagePayload = {
-        chatId: selectedChat._id,
+        chatId: activeChat._id,
         ...messageData,
       };
       
-      if (selectedChat.groupId || selectedChat._id?.startsWith("group_")) {
-        messagePayload.groupId = selectedChat.groupId || selectedChat._id.replace("group_", "");
+      if (activeChat.groupId || activeChat._id?.startsWith("group_")) {
+        messagePayload.groupId = activeChat.groupId || activeChat._id.replace("group_", "");
       }
 
       // Create optimistic message (temporary ID)
       const tempMessageId = `temp_${Date.now()}_${Math.random()}`;
       const optimisticMessage = {
         _id: tempMessageId,
-        chatId: selectedChat._id,
+        chatId: activeChat._id,
         senderId: authUser ? { _id: authUser._id, ...authUser } : null,
-        receiverId: selectedChat.otherUser || null,
+        receiverId: activeChat.otherUser || null,
+        groupId: messagePayload.groupId || null,
         text: messageData.text || "",
         image: messageData.image || "",
         sticker: messageData.sticker || "",
@@ -677,7 +700,14 @@ export const useChatStore = create((set, get) => ({
           get().getMessages(chat._id);
         }
       });
+    } else {
+      // Clear selectedChat when selectedUser is null
+      set({ selectedChat: null });
     }
+  },
+
+  setSelectedChat: (selectedChat) => {
+    set({ selectedChat });
   },
 
   setReplyingTo: (message) => set({ replyingTo: message }),

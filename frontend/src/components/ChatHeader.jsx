@@ -37,7 +37,7 @@ const ChatHeader = () => {
     }
     
     // Check if user is online
-    if (!onlineUsers.includes(selectedUser._id)) {
+    if (!onlineUsers.some(id => id?.toString() === selectedUser._id?.toString())) {
       setCallType("video");
       setShowEmailModal(true);
       return;
@@ -134,15 +134,28 @@ const ChatHeader = () => {
       callId: `call_${authUser._id}_${selectedUser._id}_${Date.now()}`, // Unique call ID
     };
     socket.emit("call-user", callData);
-    setActiveCall(callData);
-    toast.success("Initiating video call...");
+    // Store outgoing call data - will be used when receiver accepts
+    useCallStore.getState().setOutgoingCall(callData);
+    // Don't set activeCall immediately - wait for receiver to accept
+    // The activeCall will be set when we receive "call-answered" event with answer: true
+    
+    // Set timeout to clear outgoing call if no response (30 seconds)
+    setTimeout(() => {
+      const callStore = useCallStore.getState();
+      if (callStore.outgoingCall && callStore.outgoingCall.callId === callData.callId && !callStore.activeCall) {
+        callStore.setOutgoingCall(null);
+        toast.error("Call timed out - no answer");
+      }
+    }, 30000);
+    
+    toast.success("Calling...");
   };
 
   const handleVoiceCall = async () => {
     if (!selectedChat || !selectedUser) return;
     
     // Check if user is online
-    if (!onlineUsers.includes(selectedUser._id)) {
+    if (!onlineUsers.some(id => id?.toString() === selectedUser._id?.toString())) {
       setCallType("voice");
       setShowEmailModal(true);
       return;
@@ -203,8 +216,21 @@ const ChatHeader = () => {
       callId: `call_${authUser._id}_${selectedUser._id}_${Date.now()}`, // Unique call ID
     };
     socket.emit("call-user", callData);
-    setActiveCall(callData);
-    toast.success("Initiating voice call...");
+    // Store outgoing call data - will be used when receiver accepts
+    useCallStore.getState().setOutgoingCall(callData);
+    // Don't set activeCall immediately - wait for receiver to accept
+    // The activeCall will be set when we receive "call-answered" event with answer: true
+    
+    // Set timeout to clear outgoing call if no response (30 seconds)
+    setTimeout(() => {
+      const callStore = useCallStore.getState();
+      if (callStore.outgoingCall && callStore.outgoingCall.callId === callData.callId && !callStore.activeCall) {
+        callStore.setOutgoingCall(null);
+        toast.error("Call timed out - no answer");
+      }
+    }, 30000);
+    
+    toast.success("Calling...");
   };
 
   const handleSendEmail = async () => {
@@ -345,7 +371,7 @@ const ChatHeader = () => {
                 src={selectedUser.profilePic || "/avatar.png"}
                 alt={selectedUser.fullName}
               />
-              {onlineUsers.includes(selectedUser._id) && (
+              {onlineUsers.some(id => id?.toString() === selectedUser._id?.toString()) && (
                 <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full ring-2 ring-base-100"></span>
               )}
             </div>
@@ -355,7 +381,7 @@ const ChatHeader = () => {
           <div>
             <h3 className="font-medium">{selectedUser.fullName}</h3>
             <p className="text-sm text-base-content/70">
-              {onlineUsers.includes(selectedUser._id) ? "Online" : "Offline"}
+              {onlineUsers.some(id => id?.toString() === selectedUser._id?.toString()) ? "Online" : "Offline"}
             </p>
           </div>
         </div>

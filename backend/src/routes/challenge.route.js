@@ -2,7 +2,10 @@ import express from "express";
 import { protectRoute } from "../middleware/auth.middleware.js";
 import Challenge from "../models/challenge.model.js";
 import UserChallenge from "../models/userChallenge.model.js";
+import GroupChallenge from "../models/groupChallenge.model.js";
 import User from "../models/user.model.js";
+import Group from "../models/group.model.js";
+import { getReceiverSocketId } from "../lib/socket.js";
 
 const router = express.Router();
 
@@ -321,9 +324,11 @@ router.get("/daily", protectRoute, async (req, res) => {
     
     // First, ensure user has all active daily Challenge templates as UserChallenges
     // Filter out challenges with 0 points automatically
+    // Only get challenges for users (not groups)
     const activeDailyChallenges = await Challenge.find({ 
       isActive: true, 
       type: "daily",
+      challengeFor: "user", // Only user challenges
       points: { $gt: 0 } // Only get challenges with points > 0
     });
     
@@ -459,8 +464,10 @@ router.get("/my-challenges", protectRoute, async (req, res) => {
     
     // Get all active challenges from Challenge collection
     // Filter out challenges with 0 points automatically
+    // Only get challenges for users (not groups)
     const activeChallenges = await Challenge.find({ 
       isActive: true,
+      challengeFor: "user", // Only user challenges
       points: { $gt: 0 } // Only get challenges with points > 0
     });
     console.log(`Found ${activeChallenges.length} active Challenge templates (0 point challenges filtered out)`);
@@ -608,9 +615,9 @@ router.post("/init-lifetime", protectRoute, async (req, res) => {
 // Admin: Create challenge
 router.post("/create", protectRoute, isAdmin, async (req, res) => {
   try {
-    const { title, description, type, points, target, category, startDate, endDate, challengeData, timeLimit } = req.body;
+    const { title, description, type, challengeFor, points, target, category, startDate, endDate, challengeData, timeLimit } = req.body;
 
-    console.log("📝 [CREATE CHALLENGE] Request received:", { title, type, points, target, category });
+    console.log("📝 [CREATE CHALLENGE] Request received:", { title, type, challengeFor, points, target, category });
 
     // Stricter validation - check for null/undefined explicitly, allow 0
     if (!title || !type || points === undefined || points === null || !target) {
@@ -627,6 +634,12 @@ router.post("/create", protectRoute, isAdmin, async (req, res) => {
 
     if (!["daily", "lifetime"].includes(type)) {
       return res.status(400).json({ message: "Type must be 'daily' or 'lifetime'" });
+    }
+
+    // Validate challengeFor field
+    const validChallengeFor = challengeFor || "user"; // Default to "user" if not provided
+    if (!["user", "group"].includes(validChallengeFor)) {
+      return res.status(400).json({ message: "challengeFor must be 'user' or 'group'" });
     }
 
      // Check if a challenge with the same title and type already exists
@@ -689,6 +702,7 @@ router.post("/create", protectRoute, isAdmin, async (req, res) => {
       title,
       description: description || "",
       type,
+      challengeFor: validChallengeFor,
       points: pointsNum, // Use validated pointsNum
       target: Number(target),
       category: category || "custom",
@@ -811,7 +825,7 @@ router.get("/all", protectRoute, isAdmin, async (req, res) => {
 // Admin: Update challenge
 router.put("/:challengeId", protectRoute, isAdmin, async (req, res) => {
   try {
-    const { title, description, type, points, target, category, isActive, startDate, endDate, challengeData, timeLimit } = req.body;
+    const { title, description, type, challengeFor, points, target, category, isActive, startDate, endDate, challengeData, timeLimit } = req.body;
     
     // First, try to find in Challenge model (template)
     let challenge = await Challenge.findById(req.params.challengeId);
@@ -867,6 +881,12 @@ router.put("/:challengeId", protectRoute, isAdmin, async (req, res) => {
       if (title) challenge.title = title;
       if (description !== undefined) challenge.description = description;
       if (type) challenge.type = type;
+      if (challengeFor !== undefined) {
+        if (!["user", "group"].includes(challengeFor)) {
+          return res.status(400).json({ message: "challengeFor must be 'user' or 'group'" });
+        }
+        challenge.challengeFor = challengeFor;
+      }
       if (points !== undefined) {
         const newPoints = Number(points);
         if (newPoints <= 0) {
@@ -1568,6 +1588,364 @@ router.post("/reset-daily", protectRoute, async (req, res) => {
       success: false,
       message: "Failed to reset daily challenges"
     });
+  }
+});
+
+// ==================== GROUP CHALLENGES ====================
+
+// Get group challenges
+router.get("/group/:groupId", protectRoute, async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const userId = req.user._id;
+
+    // Verify user is a member of the group
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    const isMember = group.members.some(
+      member => member.toString() === userId.toString()
+    );
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+
+    // Get all active group challenges from Challenge collection
+    const activeGroupChallenges = await Challenge.find({
+      isActive: true,
+      challengeFor: "group",
+      points: { $gt: 0 }
+    });
+
+    // Ensure group has all active group challenges
+    const newGroupChallenges = [];
+    for (const challenge of activeGroupChallenges) {
+      const exists = await GroupChallenge.findOne({
+        groupId: groupId,
+        challengeId: challenge._id
+      });
+
+      if (!exists) {
+        const expiresAt = challenge.type === "daily" ? (() => {
+          const date = new Date();
+          date.setHours(23, 59, 59, 999);
+          return date;
+        })() : null;
+
+        const groupChallenge = new GroupChallenge({
+          groupId: groupId,
+          challengeId: challenge._id,
+          type: challenge.type,
+          title: challenge.title,
+          description: challenge.description || "",
+          target: challenge.target,
+          current: 0,
+          reward: { points: challenge.points || 0, badge: null },
+          stage: 1,
+          maxStages: 1,
+          stages: [],
+          completed: false,
+          completedAt: null,
+          completedBy: null,
+          expiresAt: expiresAt,
+          category: challenge.category || "custom",
+          attempts: [],
+        });
+        newGroupChallenges.push(groupChallenge);
+      }
+    }
+
+    if (newGroupChallenges.length > 0) {
+      await GroupChallenge.insertMany(newGroupChallenges);
+      console.log(`Created ${newGroupChallenges.length} new group challenges for group ${groupId}`);
+    }
+
+    // Get all group challenges with progress
+    const groupChallenges = await GroupChallenge.find({
+      groupId: groupId
+    })
+      .populate({
+        path: "challengeId",
+        select: "category challengeData timeLimit points",
+        strictPopulate: false
+      })
+      .populate("completedBy", "fullName username")
+      .sort({ createdAt: -1 });
+
+    // Filter out challenges with 0 points
+    const response = groupChallenges
+      .map(c => {
+        if (!c) return null;
+        try {
+          const obj = c.toObject ? c.toObject() : c;
+          if (!obj.attempts) {
+            obj.attempts = [];
+          }
+          const challengePoints = obj.challengeId?.points || obj.reward?.points || 0;
+          if (challengePoints <= 0) {
+            return null;
+          }
+          return obj;
+        } catch (err) {
+          console.error("Error converting group challenge to object:", err);
+          return null;
+        }
+      })
+      .filter(c => c !== null);
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Error fetching group challenges:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+// Get group challenge data (for interactive challenges)
+router.get("/group/:groupId/:challengeId/data", protectRoute, async (req, res) => {
+  try {
+    const { groupId, challengeId } = req.params;
+    const userId = req.user._id;
+
+    // Verify user is a member of the group
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    const isMember = group.members.some(
+      member => member.toString() === userId.toString()
+    );
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+
+    const challenge = await Challenge.findById(challengeId);
+    if (!challenge || challenge.challengeFor !== "group") {
+      return res.status(404).json({ message: "Group challenge not found" });
+    }
+
+    const response = {
+      _id: challenge._id,
+      title: challenge.title,
+      description: challenge.description || "",
+      category: challenge.category || "custom",
+      type: challenge.type,
+      points: challenge.points || 0,
+      timeLimit: challenge.timeLimit || null,
+      challengeData: challenge.challengeData || null,
+    };
+
+    // Don't send answers
+    if (challenge.category === "puzzle" && challenge.challengeData) {
+      response.challengeData = {
+        question: challenge.challengeData.question || "",
+        hint: challenge.challengeData.hint || ""
+      };
+    }
+
+    if (challenge.category === "trivia" && challenge.challengeData) {
+      const triviaData = { ...challenge.challengeData };
+      delete triviaData.correctAnswer;
+      response.challengeData = triviaData;
+    }
+
+    if (challenge.category === "coding" && challenge.challengeData) {
+      const codingData = { ...challenge.challengeData };
+      delete codingData.solution;
+      response.challengeData = codingData;
+    }
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Error fetching group challenge data:", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+// Submit group challenge answer
+router.post("/group/:groupId/:challengeId/submit", protectRoute, async (req, res) => {
+  try {
+    const { groupId, challengeId } = req.params;
+    const { answer, code } = req.body;
+    const userId = req.user._id;
+
+    // Verify user is a member of the group
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    const isMember = group.members.some(
+      member => member.toString() === userId.toString()
+    );
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+
+    // Get challenge template
+    const challenge = await Challenge.findById(challengeId);
+    if (!challenge || challenge.challengeFor !== "group") {
+      return res.status(404).json({ message: "Group challenge not found" });
+    }
+
+    // Get or create group challenge progress
+    let groupChallenge = await GroupChallenge.findOne({
+      groupId: groupId,
+      challengeId: challengeId
+    });
+
+    if (!groupChallenge) {
+      const expiresAt = challenge.type === "daily" ? (() => {
+        const date = new Date();
+        date.setHours(23, 59, 59, 999);
+        return date;
+      })() : null;
+
+      groupChallenge = new GroupChallenge({
+        groupId: groupId,
+        challengeId: challengeId,
+        type: challenge.type,
+        title: challenge.title,
+        description: challenge.description || "",
+        target: challenge.target,
+        current: 0,
+        reward: { points: challenge.points || 0, badge: null },
+        stage: 1,
+        maxStages: 1,
+        stages: [],
+        completed: false,
+        completedAt: null,
+        completedBy: null,
+        expiresAt: expiresAt,
+        category: challenge.category || "custom",
+        attempts: [],
+      });
+    }
+
+    // Check if already completed
+    if (groupChallenge.completed) {
+      return res.status(400).json({ message: "Challenge already completed" });
+    }
+
+    // Verify answer (similar to user challenge logic)
+    let isCorrect = false;
+    let aiResult = null;
+
+    if (challenge.category === "trivia" || challenge.category === "puzzle" || challenge.category === "quiz" || challenge.category === "coding") {
+      aiResult = await verifyAnswerWithAI(challenge, answer, code);
+      isCorrect = aiResult.isCorrect || false;
+    } else {
+      // For non-interactive challenges, just mark as correct
+      isCorrect = true;
+    }
+
+    // Record attempt
+    const attempt = {
+      userId: userId,
+      attemptDate: new Date(),
+      correct: isCorrect,
+      answer: answer || code,
+      paid: false,
+      verifiedWithAI: aiResult !== null,
+      aiResponse: aiResult?.feedback || null,
+      aiFeedback: aiResult?.feedback || null,
+      correctCount: aiResult?.correctCount || null,
+      totalQuestions: aiResult?.totalQuestions || null,
+    };
+
+    groupChallenge.attempts.push(attempt);
+
+    // Award points if correct (even partial credit for quizzes)
+    let pointsToAward = 0;
+    if (isCorrect) {
+      pointsToAward = challenge.points || 0;
+    } else if (challenge.category === "quiz" && aiResult && aiResult.correctCount !== undefined) {
+      // Partial credit for quizzes
+      const basePoints = challenge.points || 0;
+      const correctRatio = aiResult.correctCount / aiResult.totalQuestions;
+      pointsToAward = Math.floor(basePoints * correctRatio);
+    }
+
+    // Award points to the user who completed it
+    if (pointsToAward > 0) {
+      const user = await User.findById(userId);
+      if (user) {
+        user.points = (user.points || 0) + pointsToAward;
+        user.totalPoints = (user.totalPoints || 0) + pointsToAward;
+        user.pointsHistory.push({
+          type: "group_challenge",
+          amount: pointsToAward,
+          description: `Completed group challenge: ${challenge.title}`,
+          timestamp: new Date(),
+        });
+        await user.save();
+
+        // Emit socket event
+        if (req.app.get("io")) {
+          req.app.get("io").to(userId.toString()).emit("points-updated", { points: user.points });
+        }
+      }
+    }
+
+    // Mark as completed if fully correct
+    if (isCorrect) {
+      groupChallenge.current = groupChallenge.target;
+      groupChallenge.completed = true;
+      groupChallenge.completedAt = new Date();
+      groupChallenge.completedBy = userId;
+
+      // Emit socket event to notify all group members
+      if (req.app.get("io")) {
+        const user = await User.findById(userId).select("fullName username");
+        const group = await Group.findById(groupId);
+        
+        if (group) {
+          const io = req.app.get("io");
+          const notificationData = {
+            challengeId: challengeId,
+            challengeTitle: challenge.title,
+            completedBy: {
+              _id: userId,
+              fullName: user?.fullName || user?.username || "Someone",
+              username: user?.username
+            },
+            points: pointsToAward
+          };
+          
+          // Emit to all group members individually (same pattern as group messages)
+          group.members.forEach((memberId) => {
+            const memberSocketId = getReceiverSocketId(memberId.toString());
+            if (memberSocketId) {
+              io.to(memberSocketId).emit("group-challenge-completed", notificationData);
+            }
+          });
+        }
+      }
+    }
+
+    await groupChallenge.save();
+
+    res.status(200).json({
+      success: isCorrect,
+      correct: isCorrect,
+      points: pointsToAward,
+      feedback: aiResult?.feedback || (isCorrect ? "Correct!" : "Incorrect. Try again!"),
+      correctCount: aiResult?.correctCount,
+      totalQuestions: aiResult?.totalQuestions,
+      challenge: {
+        _id: groupChallenge._id,
+        current: groupChallenge.current,
+        target: groupChallenge.target,
+        completed: groupChallenge.completed,
+        completedAt: groupChallenge.completedAt,
+        completedBy: groupChallenge.completedBy,
+      }
+    });
+  } catch (error) {
+    console.error("Error submitting group challenge:", error);
+    res.status(500).json({ message: "Internal Server Error" });
   }
 });
 

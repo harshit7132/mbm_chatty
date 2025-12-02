@@ -1,10 +1,12 @@
 import { useChatStore } from "../store/useChatStore";
+import { useGroupStore } from "../store/useGroupStore";
 import { useEffect, useRef } from "react";
 
 import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import MessageSkeleton from "./skeletons/MessageSkeleton";
 import MessageBubble from "./MessageBubble";
+import GroupChallenges from "./GroupChallenges";
 import { useAuthStore } from "../store/useAuthStore";
 
 const ChatContainer = () => {
@@ -18,8 +20,14 @@ const ChatContainer = () => {
     subscribeToMessages,
     unsubscribeFromMessages,
   } = useChatStore();
+  const { selectedGroup } = useGroupStore();
   const { authUser, onlineUsers } = useAuthStore();
   const messageEndRef = useRef(null);
+  
+  // Get groupId from selectedChat or selectedGroup
+  const groupId = selectedChat?.type === "group" 
+    ? (selectedChat?.groupId || selectedGroup?._id)
+    : selectedGroup?._id;
 
   useEffect(() => {
     if (selectedChat) {
@@ -83,6 +91,9 @@ const ChatContainer = () => {
   return (
     <div className="flex-1 flex flex-col overflow-auto">
       <ChatHeader />
+
+      {/* Show Group Challenges if it's a group chat */}
+      {groupId && <GroupChallenges groupId={groupId} />}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (

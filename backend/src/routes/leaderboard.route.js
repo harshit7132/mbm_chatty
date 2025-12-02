@@ -2,6 +2,8 @@ import express from "express";
 import { protectRoute } from "../middleware/auth.middleware.js";
 import User from "../models/user.model.js";
 import UserChallenge from "../models/userChallenge.model.js";
+import GroupChallenge from "../models/groupChallenge.model.js";
+import Group from "../models/group.model.js";
 
 const router = express.Router();
 
@@ -106,6 +108,8 @@ router.get("/:type", protectRoute, async (req, res) => {
         break;
 
       case "challenges-completed":
+        // Backward compatibility - maps to user challenges
+      case "user-challenges-completed":
         // Use MongoDB aggregation pipeline to efficiently count completed challenges per user
         // and join with User collection in a single query
         const completedChallengesAgg = await UserChallenge.aggregate([
@@ -179,6 +183,73 @@ router.get("/:type", protectRoute, async (req, res) => {
         ]);
 
         leaderboard = completedChallengesAgg;
+        break;
+
+      case "group-challenges-completed":
+        // Group challenges leaderboard
+        try {
+          // Use MongoDB aggregation pipeline to count completed challenges per group
+          const completedGroupChallengesAgg = await GroupChallenge.aggregate([
+            {
+              // Match only completed challenges
+              $match: {
+                completed: true
+              }
+            },
+            {
+              // Group by groupId and count completed challenges
+              $group: {
+                _id: "$groupId",
+                completedCount: { $sum: 1 }
+              }
+            },
+            {
+              // Sort by completed count (descending)
+              $sort: { completedCount: -1 }
+            },
+            {
+              // Limit to top 50 groups
+              $limit: 50
+            },
+            {
+              // Lookup group details from Group collection
+              $lookup: {
+                from: "groups",
+                localField: "_id",
+                foreignField: "_id",
+                as: "groupDetails"
+              }
+            },
+            {
+              // Unwind the groupDetails array (should be single element)
+              $unwind: {
+                path: "$groupDetails",
+                preserveNullAndEmptyArrays: false // Only include groups that exist
+              }
+            },
+            {
+              // Project the final structure
+              $project: {
+                _id: "$groupDetails._id",
+                fullName: "$groupDetails.name",
+                email: null, // Groups don't have email
+                profilePic: {
+                  $ifNull: [
+                    "$groupDetails.groupPic",
+                    ""
+                  ]
+                },
+                score: "$completedCount"
+              }
+            }
+          ]);
+
+          leaderboard = completedGroupChallengesAgg;
+        } catch (error) {
+          console.log("Error fetching group challenges leaderboard:", error.message);
+          // Return empty array if there's an error
+          leaderboard = [];
+        }
         break;
 
       default:

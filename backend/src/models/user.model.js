@@ -50,7 +50,7 @@ const userSchema = new mongoose.Schema(
       {
         type: {
           type: String,
-          enum: ["earned", "spent", "time-based", "challenge", "chat", "challenge_attempt"],
+          enum: ["earned", "spent", "time-based", "challenge", "group_challenge", "chat", "challenge_attempt"],
         },
         amount: Number,
         description: String,
@@ -60,6 +60,7 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
+    
     // Badges system
     badges: [
       {

@@ -7,7 +7,8 @@ const LEADERBOARD_TYPES = [
   { key: "chats", label: "Chats", icon: Medal },
   { key: "points-earned", label: "Points Earned", icon: Award },
   { key: "points-spent", label: "Points Spent", icon: Coins },
-  { key: "challenges-completed", label: "Challenges Completed", icon: Target },
+  { key: "user-challenges-completed", label: "User Challenges", icon: Target },
+  { key: "group-challenges-completed", label: "Group Challenges", icon: Target },
 ];
 
 const ITEMS_PER_PAGE = 50;
@@ -104,7 +105,7 @@ const Leaderboard = () => {
             <thead>
               <tr>
                 <th>Rank</th>
-                <th>User</th>
+                <th>{activeTab === "group-challenges-completed" ? "Group" : "User"}</th>
                 <th>Value</th>
               </tr>
             </thead>
@@ -116,11 +117,13 @@ const Leaderboard = () => {
                   </td>
                 </tr>
               ) : (
-                paginatedLeaderboard.map((user, index) => {
+                paginatedLeaderboard.map((item, index) => {
                   const globalIndex = (currentPage - 1) * ITEMS_PER_PAGE + index;
-                  console.log(`Rendering user ${globalIndex + 1}:`, user.fullName || user.username);
+                  const isGroup = activeTab === "group-challenges-completed";
+                  const displayName = item.fullName || item.username || "Unknown";
+                  console.log(`Rendering ${isGroup ? 'group' : 'user'} ${globalIndex + 1}:`, displayName);
                   return (
-                  <tr key={user._id} className="hover">
+                  <tr key={item._id} className="hover">
                     <td>
                       <div className="flex items-center gap-2">
                         <span className="text-lg">{getRankIcon(globalIndex + 1)}</span>
@@ -132,16 +135,16 @@ const Leaderboard = () => {
                         <div className="avatar">
                           <div className="w-10 rounded-full">
                             <img
-                              src={user.profilePic || "/avatar.png"}
-                              alt={user.fullName}
+                              src={item.profilePic || (isGroup ? "/group.png" : "/avatar.png")}
+                              alt={displayName}
                             />
                           </div>
                         </div>
                         <div>
-                          <div className="font-medium">{user.fullName}</div>
-                          {user.badges && user.badges.length > 0 && (
+                          <div className="font-medium">{displayName}</div>
+                          {!isGroup && item.badges && item.badges.length > 0 && (
                             <div className="flex gap-1 mt-1">
-                              {user.badges.slice(0, 3).map((badge, idx) => (
+                              {item.badges.slice(0, 3).map((badge, idx) => (
                                 <span
                                   key={idx}
                                   className="badge badge-sm badge-primary"
@@ -155,7 +158,7 @@ const Leaderboard = () => {
                       </div>
                     </td>
                     <td>
-                      <span className="font-semibold">{getValue(user, activeTab)}</span>
+                      <span className="font-semibold">{getValue(item, activeTab)}</span>
                     </td>
                   </tr>
                   );

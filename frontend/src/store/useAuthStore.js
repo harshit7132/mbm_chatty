@@ -55,8 +55,10 @@ export const useAuthStore = create((set, get) => ({
   fetchOnlineUsers: async () => {
     try {
       const res = await axiosInstance.get("/auth/online-users");
-      set({ onlineUsers: res.data.onlineUsers || [] });
-      console.log("✅ Fetched online users from MongoDB:", res.data.onlineUsers.length);
+      // Normalize all IDs to strings for consistency
+      const normalizedUsers = (res.data.onlineUsers || []).map(id => id?.toString());
+      set({ onlineUsers: normalizedUsers });
+      console.log("✅ Fetched online users from MongoDB:", normalizedUsers.length);
     } catch (error) {
       console.error("❌ Error fetching online users:", error);
     }
@@ -91,7 +93,10 @@ export const useAuthStore = create((set, get) => ({
       get().connectSocket();
       return res.data; // Return user data
     } catch (error) {
-      toast.error(error.response?.data?.message || "Login failed");
+      const errorMessage = error.response?.data?.message || error.message || "Login failed";
+      console.error("Login error:", errorMessage);
+      console.error("Full error:", error);
+      toast.error(errorMessage);
       throw error; // Re-throw to allow caller to handle
     } finally {
       set({ isLoggingIn: false });
@@ -265,25 +270,33 @@ export const useAuthStore = create((set, get) => ({
     console.log("✅ Global delete warning listeners initialized");
 
     socket.on("getOnlineUsers", (userIds) => {
+      // Normalize all user IDs to strings for consistency
+      const normalizedUserIds = userIds.map(id => id?.toString());
       // Merge socket online users with MongoDB online users
       get().fetchOnlineUsers().then(() => {
-        const mongoUsers = get().onlineUsers;
-        const allUsers = [...new Set([...userIds, ...mongoUsers])];
+        const mongoUsers = get().onlineUsers.map(id => id?.toString());
+        const allUsers = [...new Set([...normalizedUserIds, ...mongoUsers])];
         set({ onlineUsers: allUsers });
       });
     });
 
     socket.on("user-online", (userId) => {
-      const currentUsers = get().onlineUsers;
-      if (!currentUsers.includes(userId)) {
-        set({ onlineUsers: [...currentUsers, userId] });
+      const normalizedUserId = userId?.toString();
+      const currentUsers = get().onlineUsers.map(id => id?.toString());
+      if (!currentUsers.includes(normalizedUserId)) {
+        set({ onlineUsers: [...currentUsers, normalizedUserId] });
       }
       // Also sync with MongoDB
       get().fetchOnlineUsers();
     });
 
     socket.on("user-offline", (userId) => {
-      set({ onlineUsers: get().onlineUsers.filter((id) => id !== userId) });
+      const normalizedUserId = userId?.toString();
+      set({ 
+        onlineUsers: get().onlineUsers
+          .map(id => id?.toString())
+          .filter((id) => id !== normalizedUserId) 
+      });
       // Also sync with MongoDB
       get().fetchOnlineUsers();
     });
@@ -327,28 +340,30 @@ export const useAuthStore = create((set, get) => ({
       }
       
       // Check if this call is for us
-      // Accept if:
-      // 1. targetUserId matches currentUserId (call is for us), OR
-      // 2. targetUserId doesn't match but fromUserId is different (might be broadcast or format issue)
-      // 3. No targetUserId (broadcast) - accept if fromUserId is different
-      const isTargetMatch = targetUserId && (
-        targetUserId === currentUserId || 
-        targetUserId.toString() === currentUserId.toString() ||
-        String(targetUserId).trim() === String(currentUserId).trim()
-      );
+      // Normalize all IDs for comparison
+      const normalizedTargetUserId = targetUserId ? String(targetUserId).trim().toLowerCase() : null;
+      const normalizedCurrentUserId = currentUserIdTrimmed.toLowerCase();
+      const normalizedFromUserId = fromUserId ? String(fromUserId).trim().toLowerCase() : null;
       
-      const isBroadcast = !targetUserId || !isTargetMatch;
+      // Accept the call if:
+      // 1. targetUserId matches currentUserId (call is specifically for us), OR
+      // 2. No targetUserId specified (broadcast) and fromUserId is different from currentUserId, OR
+      // 3. targetUserId doesn't match but fromUserId is different (format mismatch, but from someone else)
+      const isTargetMatch = normalizedTargetUserId && normalizedTargetUserId === normalizedCurrentUserId;
+      const isFromDifferentUser = normalizedFromUserId && normalizedFromUserId !== normalizedCurrentUserId;
+      const isBroadcast = !normalizedTargetUserId;
       
-      // Always accept if it's from someone else (even if broadcast)
-      if (isBroadcast && fromUserId && fromUserId !== currentUserId) {
-        console.log("📢 Incoming call appears to be broadcast or format mismatch");
-        console.log("   Call target:", targetUserId, "Current user:", currentUserId);
-        console.log("   Call from:", fromUserId);
-        console.log("   ✅ Accepting call (broadcast or format issue, but from different user)");
-      } else if (!isBroadcast) {
+      if (isTargetMatch) {
         console.log("✅ Incoming call target matches current user");
+      } else if (isBroadcast && isFromDifferentUser) {
+        console.log("📢 Incoming call is broadcast from different user - accepting");
+      } else if (!isTargetMatch && isFromDifferentUser) {
+        console.log("📢 Incoming call target mismatch but from different user - accepting (format issue?)");
       } else {
         console.log("⚠️ Incoming call rejected - from self or invalid");
+        console.log("   isTargetMatch:", isTargetMatch);
+        console.log("   isFromDifferentUser:", isFromDifferentUser);
+        console.log("   isBroadcast:", isBroadcast);
         return;
       }
       
@@ -391,19 +406,42 @@ export const useAuthStore = create((set, get) => ({
 
     socket.on("call-answered", (data) => {
       console.log("Received call-answered event:", data);
+      const callStore = useCallStore.getState();
+      
       if (data.answer) {
-        // Don't overwrite activeCall if it already exists (caller already has activeCall set)
-        // The activeCall should remain as is when the other user accepts
-        const currentActiveCall = useCallStore.getState().activeCall;
+        // Receiver accepted the call - now set activeCall for the caller
+        const currentActiveCall = callStore.activeCall;
         if (!currentActiveCall) {
-          // Only set if there's no active call (shouldn't happen, but safety check)
-          useCallStore.getState().setActiveCall(data);
+          // Use the stored outgoing call data
+          const outgoingCall = callStore.outgoingCall;
+          if (outgoingCall && outgoingCall.callId === data.callId) {
+            // Match found - use the stored call data
+            callStore.setActiveCall(outgoingCall);
+            callStore.setOutgoingCall(null); // Clear outgoing call
+            console.log("✅ Call accepted - setting active call from outgoing call:", outgoingCall);
+          } else {
+            // Fallback: reconstruct call data
+            const callData = {
+              callId: data.callId,
+              fromUserId: get().authUser?._id,
+              targetUserId: data.fromUserId, // The person who accepted (was the target)
+              type: outgoingCall?.type || "video",
+              isIncoming: false, // Caller initiated, so not incoming
+              chatId: outgoingCall?.chatId,
+            };
+            callStore.setActiveCall(callData);
+            callStore.setOutgoingCall(null);
+            console.log("✅ Call accepted - setting active call (reconstructed):", callData);
+          }
         } else {
-          // Just update the call status, don't replace the entire call object
+          // Call already active (shouldn't happen, but keep existing)
           console.log("Call already active, keeping existing call data");
+          callStore.setOutgoingCall(null); // Clear outgoing call anyway
         }
       } else {
-        useCallStore.getState().clearCall();
+        // Call was rejected
+        callStore.clearCall();
+        toast.error("Call was declined");
       }
     });
 

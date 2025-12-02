@@ -129,7 +129,7 @@ const UserSearch = ({ onSelectUser, onClose }) => {
                             src={user.profilePic || "/avatar.png"}
                             alt={user.fullName}
                           />
-                          {onlineUsers.includes(user._id) && (
+                          {onlineUsers.some(id => id?.toString() === user._id?.toString()) && (
                             <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full ring-2 ring-base-100"></span>
                           )}
                         </div>
@@ -137,7 +137,7 @@ const UserSearch = ({ onSelectUser, onClose }) => {
                       <div className="flex-1">
                         <div className="font-medium">{user.fullName}</div>
                         <div className="text-sm text-base-content/70">
-                          {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+                          {onlineUsers.some(id => id?.toString() === user._id?.toString()) ? "Online" : "Offline"}
                           {isFriend && " • Friend"}
                         </div>
                       </div>

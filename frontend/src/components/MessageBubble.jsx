@@ -34,11 +34,27 @@ const MessageBubble = ({ message, selectedUser }) => {
   const [showEmojis, setShowEmojis] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
   
-  // Handle both populated object and string ID
+  // Handle both populated object and string ID - normalize both to strings for comparison
   const senderId = typeof message.senderId === 'object' && message.senderId?._id 
     ? message.senderId._id 
     : message.senderId;
-  const isOwnMessage = senderId === authUser._id || senderId?.toString() === authUser._id?.toString();
+  const normalizedSenderId = senderId?.toString();
+  const normalizedAuthUserId = authUser?._id?.toString();
+  const isOwnMessage = normalizedSenderId && normalizedAuthUserId && normalizedSenderId === normalizedAuthUserId;
+  
+  // Extract sender info for group messages
+  const senderInfo = typeof message.senderId === 'object' && message.senderId
+    ? message.senderId
+    : null;
+  const senderName = senderInfo 
+    ? (senderInfo.fullName || senderInfo.username || senderInfo.email?.split("@")[0] || "User")
+    : (selectedUser?.fullName || selectedUser?.username || "User");
+  const senderAvatar = senderInfo
+    ? (senderInfo.profilePic || senderInfo.avatar || "/avatar.png")
+    : (selectedUser?.profilePic || "/avatar.png");
+  
+  // Check if this is a group message
+  const isGroupMessage = !!message.groupId || !!selectedGroup;
   
   // Check if user is admin in group (for group messages)
   const isGroupAdmin = selectedGroup && (
@@ -99,7 +115,7 @@ const MessageBubble = ({ message, selectedUser }) => {
             src={
               isOwnMessage
                 ? authUser.profilePic || "/avatar.png"
-                : selectedUser?.profilePic || "/avatar.png"
+                : senderAvatar
             }
             alt="profile pic"
           />
@@ -107,6 +123,12 @@ const MessageBubble = ({ message, selectedUser }) => {
       </div>
 
       <div className="chat-header mb-1">
+        {/* Show sender name for group messages (not own messages) */}
+        {isGroupMessage && !isOwnMessage && (
+          <span className="text-xs font-semibold opacity-70 mr-2">
+            {senderName}
+          </span>
+        )}
         <time className="text-xs opacity-50 ml-1">
           {formatMessageTime(message.createdAt)}
         </time>

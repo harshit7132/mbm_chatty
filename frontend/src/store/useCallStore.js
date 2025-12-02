@@ -4,6 +4,7 @@ import { useAuthStore } from "./useAuthStore";
 export const useCallStore = create((set, get) => ({
   activeCall: null,
   incomingCall: null,
+  outgoingCall: null, // Track calls we've initiated (waiting for answer)
 
   setActiveCall: (callData) => {
     console.log("📞 Setting active call:", callData);
@@ -18,7 +19,11 @@ export const useCallStore = create((set, get) => ({
     set({ incomingCall: callData });
     console.log("✅ [useCallStore] Incoming call state updated:", get().incomingCall);
   },
-  clearCall: () => set({ activeCall: null, incomingCall: null }),
+  setOutgoingCall: (callData) => {
+    console.log("📞 [useCallStore] Setting outgoing call:", callData);
+    set({ outgoingCall: callData });
+  },
+  clearCall: () => set({ activeCall: null, incomingCall: null, outgoingCall: null }),
 
   answerCall: async () => {
     const { incomingCall } = get();

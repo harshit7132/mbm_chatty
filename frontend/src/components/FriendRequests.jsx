@@ -115,7 +115,7 @@ const FriendRequests = () => {
                               alt={user.fullName}
                             />
                           </div>
-                          {onlineUsers.includes(user._id) && (
+                          {onlineUsers.some(id => id?.toString() === user._id?.toString()) && (
                             <span className="absolute bottom-0 right-0 size-3 bg-green-500 rounded-full ring-2 ring-base-200"></span>
                           )}
                         </div>
@@ -124,7 +124,7 @@ const FriendRequests = () => {
                             {user.fullName || user.username || user.email?.split("@")[0] || "User"}
                           </div>
                           <div className="text-sm text-base-content/70">
-                            {onlineUsers.includes(user._id) ? "Online" : "Offline"}
+                            {onlineUsers.some(id => id?.toString() === user._id?.toString()) ? "Online" : "Offline"}
                           </div>
                         </div>
                         <div className="flex gap-2">

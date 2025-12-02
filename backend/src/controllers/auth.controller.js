@@ -192,16 +192,37 @@ export const signup = async (req, res) => {
 export const login = async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email });
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    // Normalize email (lowercase, trim) - matches User model schema
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
+      console.log(`Login attempt failed: User not found for email: ${normalizedEmail}`);
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // Check if user has a password
+    if (!user.password) {
+      console.log(`Login attempt failed: User ${normalizedEmail} has no password (OTP account)`);
+      return res.status(400).json({ 
+        message: "This account was created with OTP. Please use OTP login instead." 
+      });
+    }
+
+    // Compare password
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
     if (!isPasswordCorrect) {
+      console.log(`Login attempt failed: Incorrect password for email: ${normalizedEmail}`);
       return res.status(400).json({ message: "Invalid credentials" });
     }
+
+    console.log(`Login successful for user: ${normalizedEmail}`);
 
     // No daily login requirement - activity tracking handles streaks automatically
     // Just update total logins for statistics
@@ -226,7 +247,12 @@ export const login = async (req, res) => {
       consecutiveDaysActive: user.consecutiveDaysActive || 0, // Activity-based streak
     });
   } catch (error) {
-    console.log("Error in login controller", error.message);
+    console.log("Error in login controller:", error.message);
+    console.log("Error stack:", error.stack);
+    // If it's a validation error or known error, return 400 with message
+    if (error.name === "ValidationError" || error.message.includes("Invalid")) {
+      return res.status(400).json({ message: error.message || "Invalid credentials" });
+    }
     res.status(500).json({ message: "Internal Server Error" });
   }
 };

@@ -14,6 +14,7 @@ const VideoCall = ({ callData, onEndCall }) => {
   const clientRef = useRef(null);
   const localAudioTrackRef = useRef(null);
   const localVideoTrackRef = useRef(null);
+  const isCleaningUpRef = useRef(false); // Prevent duplicate cleanup
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [callStatus, setCallStatus] = useState("connecting");
@@ -366,32 +367,86 @@ const VideoCall = ({ callData, onEndCall }) => {
 
     initializeAgora();
 
-    // Cleanup function
+    // Cleanup function - runs when component unmounts or dependencies change
     return () => {
+      console.log("🔄 Component unmounting or dependencies changed, cleaning up...");
       cleanup();
     };
   }, [callData, authUser, onEndCall]);
 
+  // Additional cleanup when component unmounts (even if callData is null)
+  useEffect(() => {
+    return () => {
+      console.log("🔄 Component unmounting, ensuring all media tracks are stopped...");
+      cleanup();
+    };
+  }, []);
+
   const cleanup = async () => {
-    console.log("🧹 Cleaning up Agora RTC...");
+    // Prevent duplicate cleanup calls
+    if (isCleaningUpRef.current) {
+      console.log("⚠️ Cleanup already in progress, skipping...");
+      return;
+    }
+    
+    isCleaningUpRef.current = true;
+    console.log("🧹 Cleaning up Agora RTC and media streams..."); 
     
     try {
-      // Stop and close local tracks
+      // Stop and close local video track
       if (localVideoTrackRef.current) {
-        localVideoTrackRef.current.stop();
-        localVideoTrackRef.current.close();
+        try {
+          // Get underlying MediaStream track and stop it
+          const mediaStreamTrack = localVideoTrackRef.current.getMediaStreamTrack();
+          if (mediaStreamTrack) {
+            mediaStreamTrack.stop();
+            console.log("✅ Stopped underlying video MediaStream track");
+          }
+        } catch (err) {
+          console.warn("Error stopping video MediaStream track:", err);
+        }
+        
+        try {
+          localVideoTrackRef.current.stop();
+          localVideoTrackRef.current.close();
+          console.log("✅ Stopped and closed Agora video track");
+        } catch (err) {
+          console.warn("Error stopping/closing Agora video track:", err);
+        }
         localVideoTrackRef.current = null;
       }
 
+      // Stop and close local audio track
       if (localAudioTrackRef.current) {
-        localAudioTrackRef.current.stop();
-        localAudioTrackRef.current.close();
+        try {
+          // Get underlying MediaStream track and stop it
+          const mediaStreamTrack = localAudioTrackRef.current.getMediaStreamTrack();
+          if (mediaStreamTrack) {
+            mediaStreamTrack.stop();
+            console.log("✅ Stopped underlying audio MediaStream track");
+          }
+        } catch (err) {
+          console.warn("Error stopping audio MediaStream track:", err);
+        }
+        
+        try {
+          localAudioTrackRef.current.stop();
+          localAudioTrackRef.current.close();
+          console.log("✅ Stopped and closed Agora audio track");
+        } catch (err) {
+          console.warn("Error stopping/closing Agora audio track:", err);
+        }
         localAudioTrackRef.current = null;
       }
 
       // Leave channel and destroy client
       if (clientRef.current) {
-        await clientRef.current.leave();
+        try {
+          await clientRef.current.leave();
+          console.log("✅ Left Agora channel");
+        } catch (err) {
+          console.warn("Error leaving Agora channel:", err);
+        }
         clientRef.current = null;
       }
 
@@ -402,8 +457,34 @@ const VideoCall = ({ callData, onEndCall }) => {
       if (remoteVideoRef.current) {
         remoteVideoRef.current.innerHTML = "";
       }
+
+      // Additional cleanup: Stop all active media tracks in the browser
+      // This ensures no camera/microphone streams are left running
+      try {
+        const activeStreams = await navigator.mediaDevices.enumerateDevices();
+        // Get all active media streams
+        const allVideoElements = document.querySelectorAll("video");
+        allVideoElements.forEach(video => {
+          if (video.srcObject) {
+            const stream = video.srcObject;
+            stream.getTracks().forEach(track => {
+              if (track.readyState !== "ended") {
+                track.stop();
+                console.log("✅ Stopped additional media track:", track.kind);
+              }
+            });
+            video.srcObject = null;
+          }
+        });
+      } catch (err) {
+        console.warn("Error in additional media cleanup:", err);
+      }
+
+      console.log("✅ Cleanup completed");
     } catch (err) {
-      console.warn("Error during cleanup:", err);
+      console.error("❌ Error during cleanup:", err);
+    } finally {
+      isCleaningUpRef.current = false;
     }
   };
 

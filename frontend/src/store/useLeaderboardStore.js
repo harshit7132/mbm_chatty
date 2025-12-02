@@ -8,7 +8,8 @@ export const useLeaderboardStore = create((set, get) => ({
     chats: [],
     "points-earned": [],
     "points-spent": [],
-    "challenges-completed": [],
+    "user-challenges-completed": [],
+    "group-challenges-completed": [],
   },
   isLeaderboardsLoading: false,
 
@@ -43,12 +44,13 @@ export const useLeaderboardStore = create((set, get) => ({
   getAllLeaderboards: async () => {
     set({ isLeaderboardsLoading: true });
     try {
-      const [badges, chats, pointsEarned, pointsSpent, challengesCompleted] = await Promise.all([
+      const [badges, chats, pointsEarned, pointsSpent, userChallengesCompleted, groupChallengesCompleted] = await Promise.all([
         axiosInstance.get("/leaderboard/badges"),
         axiosInstance.get("/leaderboard/chats"),
         axiosInstance.get("/leaderboard/points-earned"),
         axiosInstance.get("/leaderboard/points-spent"),
-        axiosInstance.get("/leaderboard/challenges-completed"),
+        axiosInstance.get("/leaderboard/user-challenges-completed"),
+        axiosInstance.get("/leaderboard/group-challenges-completed"),
       ]);
 
       set({
@@ -57,7 +59,8 @@ export const useLeaderboardStore = create((set, get) => ({
           chats: chats.data,
           "points-earned": pointsEarned.data,
           "points-spent": pointsSpent.data,
-          "challenges-completed": challengesCompleted.data,
+          "user-challenges-completed": userChallengesCompleted.data,
+          "group-challenges-completed": groupChallengesCompleted.data,
         },
       });
     } catch (error) {

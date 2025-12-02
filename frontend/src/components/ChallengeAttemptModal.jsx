@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { X, Clock, CheckCircle, XCircle } from "lucide-react";
 import { axiosInstance } from "../lib/axios";
 import toast from "react-hot-toast";
 import { useChallengeStore } from "../store/useChallengeStore";
 import { useAuthStore } from "../store/useAuthStore";
 
-const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
+const ChallengeAttemptModal = ({ challenge, isOpen, onClose, isGroupChallenge = false, groupId = null }) => {
   const [challengeData, setChallengeData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [textAnswer, setTextAnswer] = useState("");
   const [codeAnswer, setCodeAnswer] = useState("");
@@ -20,63 +21,7 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
   const { getMyChallenges, getDailyChallenges } = useChallengeStore();
   const { refreshAuthUser, authUser } = useAuthStore();
 
-  useEffect(() => {
-    if (isOpen && challenge) {
-      // Reset all state when opening a new challenge
-      setResult(null);
-      setSelectedAnswer(null);
-      setTextAnswer("");
-      setCodeAnswer("");
-      setQuizAnswers([]);
-      setTimeRemaining(null);
-      setSubmitting(false);
-      setShowAttemptInfo(false);
-      
-      // Handle challengeId - it might be an object (from populate) or a string
-      const challengeId = typeof challenge.challengeId === 'object' 
-        ? challenge.challengeId?._id || challenge.challengeId 
-        : challenge.challengeId;
-      
-      if (challengeId) {
-        fetchChallengeData(challengeId);
-        // Check if this is the first attempt and show info dialog
-        // Use the current challenge's attempts, not stale data
-        const attempts = challenge.attempts || [];
-        setAttemptCount(attempts.length);
-        if (attempts.length === 0) {
-          setShowAttemptInfo(true);
-        }
-      } else {
-        console.error("No challengeId found in challenge:", challenge);
-        toast.error("Challenge ID not found");
-        onClose();
-      }
-    } else if (!isOpen) {
-      // Reset state when modal closes
-      setResult(null);
-      setChallengeData(null);
-      setSelectedAnswer(null);
-      setTextAnswer("");
-      setCodeAnswer("");
-      setQuizAnswers([]);
-      setTimeRemaining(null);
-      setAttemptCount(0);
-      setShowAttemptInfo(false);
-    }
-  }, [isOpen, challenge]);
-
-  useEffect(() => {
-    if (timeRemaining !== null && timeRemaining > 0) {
-      const timer = setTimeout(() => {
-        setTimeRemaining(timeRemaining - 1);
-      }, 1000);
-      return () => clearTimeout(timer);
-    } else if (timeRemaining === 0 && challenge) {
-      handleSubmit(true); // Auto-submit when time runs out
-    }
-  }, [timeRemaining, challenge]);
-
-  const fetchChallengeData = async (challengeIdToFetch) => {
+  const fetchChallengeData = useCallback(async (challengeIdToFetch) => {
     try {
       setLoading(true);
       
@@ -112,20 +57,120 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
       }
       
       // Start timer if time limit exists
-      if (res.data.timeLimit) {
+      if (res.data?.timeLimit) {
         setTimeRemaining(res.data.timeLimit);
       }
     } catch (error) {
       console.error("Failed to fetch challenge data:", error);
-      toast.error("Failed to load challenge");
+      toast.error(error.response?.data?.message || "Failed to load challenge");
       onClose();
     } finally {
       setLoading(false);
     }
-  };
+  }, [challenge, onClose]);
 
-  const handleSubmit = async (isTimeout = false) => {
-    if (submitting) return;
+  const fetchGroupChallengeData = useCallback(async (groupIdToFetch, challengeIdToFetch) => {
+    try {
+      setLoading(true);
+      
+      if (!challengeIdToFetch || !groupIdToFetch) {
+        throw new Error("Challenge ID or Group ID not found");
+      }
+      
+      console.log("📋 [FRONTEND] Fetching group challenge data for ID:", challengeIdToFetch);
+      const res = await axiosInstance.get(`/challenge/group/${groupIdToFetch}/${challengeIdToFetch}/data`);
+      console.log("📋 [FRONTEND] Group challenge data received:", res.data);
+      setChallengeData(res.data);
+      
+      // Update attempt count from the current challenge prop
+      if (challenge && challenge.attempts) {
+        const attempts = Array.isArray(challenge.attempts) ? challenge.attempts : [];
+        setAttemptCount(attempts.length);
+        console.log("📋 [FRONTEND] Setting attempt count from challenge:", attempts.length);
+      } else {
+        setAttemptCount(0);
+        console.log("📋 [FRONTEND] No attempts found, setting count to 0");
+      }
+      
+      // Initialize quiz answers array
+      if (res.data.category === "quiz" && res.data.challengeData?.questions) {
+        setQuizAnswers(new Array(res.data.challengeData.questions.length).fill(null));
+      }
+      
+      // Initialize code with starter code
+      if (res.data.category === "coding" && res.data.challengeData?.starterCode) {
+        setCodeAnswer(res.data.challengeData.starterCode);
+      }
+      
+      // Start timer if time limit exists
+      if (res.data?.timeLimit) {
+        setTimeRemaining(res.data.timeLimit);
+      }
+    } catch (error) {
+      console.error("Failed to fetch group challenge data:", error);
+      toast.error(error.response?.data?.message || "Failed to load challenge");
+      onClose();
+    } finally {
+      setLoading(false);
+    }
+  }, [challenge, onClose]);
+
+  useEffect(() => {
+    if (isOpen && challenge) {
+      // Reset all state when opening a new challenge
+      setResult(null);
+      setSelectedAnswer(null);
+      setTextAnswer("");
+      setCodeAnswer("");
+      setQuizAnswers([]);
+      setTimeRemaining(null);
+      setSubmitting(false);
+      setShowAttemptInfo(false);
+      
+      // Handle challengeId - it might be an object (from populate) or a string
+      const challengeId = typeof challenge.challengeId === 'object' 
+        ? challenge.challengeId?._id || challenge.challengeId 
+        : challenge.challengeId;
+      
+      if (challengeId) {
+        // Use group challenge data endpoint if it's a group challenge
+        if (isGroupChallenge && groupId) {
+          fetchGroupChallengeData(groupId, challengeId);
+        } else {
+          fetchChallengeData(challengeId);
+        }
+        // Check if this is the first attempt and show info dialog
+        // Use the current challenge's attempts, not stale data
+        const attempts = challenge.attempts || [];
+        setAttemptCount(attempts.length);
+        if (attempts.length === 0) {
+          setShowAttemptInfo(true);
+        }
+      } else {
+        console.error("No challengeId found in challenge:", challenge);
+        toast.error("Challenge ID not found");
+        onClose();
+      }
+    }
+    
+    if (!isOpen) {
+      // Reset state when modal closes
+      setResult(null);
+      setChallengeData(null);
+      setSelectedAnswer(null);
+      setTextAnswer("");
+      setCodeAnswer("");
+      setQuizAnswers([]);
+      setTimeRemaining(null);
+      setAttemptCount(0);
+      setShowAttemptInfo(false);
+    }
+  }, [isOpen, challenge, isGroupChallenge, groupId, onClose, fetchGroupChallengeData, fetchChallengeData]);
+
+  const handleSubmit = useCallback(async function(isTimeout = false) {
+    if (submittingRef.current) {
+      return;
+    }
     
     // Check if challenge is still available
     if (!challenge) {
@@ -158,33 +203,34 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
       }
     }
     
+    submittingRef.current = true;
     setSubmitting(true);
     
     try {
       let answerToSubmit = null;
       
-      if (challengeData.category === "trivia") {
+      if (challengeData?.category === "trivia") {
         if (selectedAnswer === null) {
           toast.error("Please select an answer");
           setSubmitting(false);
           return;
         }
         answerToSubmit = selectedAnswer;
-      } else if (challengeData.category === "puzzle") {
+      } else if (challengeData?.category === "puzzle") {
         if (!textAnswer.trim()) {
           toast.error("Please enter your answer");
           setSubmitting(false);
           return;
         }
         answerToSubmit = textAnswer.trim();
-      } else if (challengeData.category === "quiz") {
+      } else if (challengeData?.category === "quiz") {
         if (quizAnswers.some(a => a === null)) {
           toast.error("Please answer all questions");
           setSubmitting(false);
           return;
         }
         answerToSubmit = quizAnswers;
-      } else if (challengeData.category === "coding") {
+      } else if (challengeData?.category === "coding") {
         if (!codeAnswer.trim()) {
           toast.error("Please write your code");
           setSubmitting(false);
@@ -204,9 +250,14 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
         return;
       }
       
-      const res = await axiosInstance.post(`/challenge/${challengeId}/submit`, {
+      // Use group challenge endpoint if it's a group challenge
+      const submitUrl = isGroupChallenge && groupId
+        ? `/challenge/group/${groupId}/${challengeId}/submit`
+        : `/challenge/${challengeId}/submit`;
+      
+      const res = await axiosInstance.post(submitUrl, {
         answer: answerToSubmit,
-        code: challengeData.category === "coding" ? codeAnswer : undefined
+        code: challengeData?.category === "coding" ? codeAnswer : undefined
       });
       
       setResult(res.data);
@@ -214,18 +265,12 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
       // Update attempt count from response
       const newAttemptCount = res.data.attemptsUsed || 0;
       setAttemptCount(newAttemptCount);
-      
-      // Update the challenge object's attempts if available
-      // This ensures the next time the modal opens, it has the correct count
-      if (challenge && res.data.attemptsUsed !== undefined) {
-        // The challenge object will be updated when challenges are refreshed
-      }
-      
+
       // Show points charged message if applicable
       if (res.data.pointsCharged > 0) {
         toast(`2 points deducted for this attempt. ${res.data.freeAttemptsRemaining} free attempts remaining.`, {
           icon: "💳",
-          duration: 3000
+          duration: 3000,
         });
       }
       
@@ -251,9 +296,22 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
       console.error("Failed to submit answer:", error);
       toast.error(error.response?.data?.message || "Failed to submit answer");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
-  };
+  }, [challenge, authUser, challengeData, selectedAnswer, textAnswer, quizAnswers, codeAnswer, isGroupChallenge, groupId, onClose, getDailyChallenges, getMyChallenges, refreshAuthUser]);
+
+  useEffect(() => {
+    if (timeRemaining !== null && timeRemaining > 0) {
+      const timer = setTimeout(() => {
+        setTimeRemaining(timeRemaining - 1);
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else if (timeRemaining === 0 && challenge) {
+      // Auto-submit when time runs out
+      handleSubmit(true);
+    }
+  }, [timeRemaining, challenge, handleSubmit]);
 
   if (!isOpen || !challenge) return null;
 
@@ -506,4 +564,3 @@ const ChallengeAttemptModal = ({ challenge, isOpen, onClose }) => {
 };
 
 export default ChallengeAttemptModal;
-

@@ -16,6 +16,12 @@ const challengeSchema = new mongoose.Schema(
       enum: ["daily", "lifetime"],
       required: true,
     },
+    challengeFor: {
+      type: String,
+      enum: ["user", "group"],
+      default: "user",
+      required: true,
+    },
     points: {
       type: Number,
       required: true,

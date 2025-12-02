@@ -26,6 +26,7 @@ const AdminPage = () => {
     title: "",
     description: "",
     type: "daily",
+    challengeFor: "user",
     points: 0,
     target: 1,
     category: "custom",
@@ -202,6 +203,7 @@ const AdminPage = () => {
         title: "",
         description: "",
         type: "daily",
+        challengeFor: "user",
         points: 0,
         target: 1,
         category: "custom",
@@ -236,6 +238,7 @@ const AdminPage = () => {
       title: challenge.title,
       description: challenge.description || "",
       type: challenge.type,
+      challengeFor: challenge.challengeFor || "user",
       points: challenge.points,
       target: challenge.target,
       category: challenge.category || "custom",
@@ -433,12 +436,15 @@ const AdminPage = () => {
                   title: "",
                   description: "",
                   type: "daily",
+                  challengeFor: "user",
                   points: 0,
                   target: 1,
                   category: "custom",
                   startDate: "",
                   endDate: "",
                   isActive: true,
+                  challengeData: null,
+                  timeLimit: null,
                 });
                 setShowChallengeModal(true);
               }}
@@ -763,34 +769,53 @@ const AdminPage = () => {
                 </div>
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text">Category</span>
+                    <span className="label-text">For *</span>
                   </label>
                   <select
                     className="select select-bordered"
-                    value={challengeForm.category}
-                    onChange={(e) => setChallengeForm({ ...challengeForm, category: e.target.value, challengeData: null })}
+                    value={challengeForm.challengeFor}
+                    onChange={(e) => setChallengeForm({ ...challengeForm, challengeFor: e.target.value })}
+                    required
                   >
-                    <option value="custom">Custom</option>
-                    <option value="chat">Chat</option>
-                    <option value="messages">Messages</option>
-                    <option value="time">Time (e.g., spend X minutes/hours)</option>
-                    <option value="streak">Streak (e.g., 7 days in a row)</option>
-                    <option value="trivia">Trivia (with question & options)</option>
-                    <option value="puzzle">Puzzle/Riddle (with answer)</option>
-                    <option value="quiz">Quiz (multiple questions)</option>
-                    <option value="coding">Coding Challenge</option>
+                    <option value="user">User</option>
+                    <option value="group">Group</option>
                   </select>
                   <label className="label">
                     <span className="label-text-alt">
-                      {challengeForm.category === "time" && "Use Target field for time duration (e.g., 30 for 30 minutes)"}
-                      {challengeForm.category === "streak" && "Use Target field for streak days (e.g., 7 for 7-day streak)"}
-                      {challengeForm.category === "chat" && "Chat-related challenges"}
-                      {challengeForm.category === "messages" && "Message-related challenges"}
-                      {challengeForm.category === "custom" && "General custom challenges"}
-                      {(challengeForm.category === "trivia" || challengeForm.category === "puzzle" || challengeForm.category === "quiz" || challengeForm.category === "coding") && "Additional fields will appear below"}
+                      Select whether this challenge is for individual users or groups
                     </span>
                   </label>
                 </div>
+              </div>
+              <div className="form-control mb-4">
+                <label className="label">
+                  <span className="label-text">Category</span>
+                </label>
+                <select
+                  className="select select-bordered"
+                  value={challengeForm.category}
+                  onChange={(e) => setChallengeForm({ ...challengeForm, category: e.target.value, challengeData: null })}
+                >
+                  <option value="custom">Custom</option>
+                  <option value="chat">Chat</option>
+                  <option value="messages">Messages</option>
+                  <option value="time">Time (e.g., spend X minutes/hours)</option>
+                  <option value="streak">Streak (e.g., 7 days in a row)</option>
+                  <option value="trivia">Trivia (with question & options)</option>
+                  <option value="puzzle">Puzzle/Riddle (with answer)</option>
+                  <option value="quiz">Quiz (multiple questions)</option>
+                  <option value="coding">Coding Challenge</option>
+                </select>
+                <label className="label">
+                  <span className="label-text-alt">
+                    {challengeForm.category === "time" && "Use Target field for time duration (e.g., 30 for 30 minutes)"}
+                    {challengeForm.category === "streak" && "Use Target field for streak days (e.g., 7 for 7-day streak)"}
+                    {challengeForm.category === "chat" && "Chat-related challenges"}
+                    {challengeForm.category === "messages" && "Message-related challenges"}
+                    {challengeForm.category === "custom" && "General custom challenges"}
+                    {(challengeForm.category === "trivia" || challengeForm.category === "puzzle" || challengeForm.category === "quiz" || challengeForm.category === "coding") && "Additional fields will appear below"}
+                  </span>
+                </label>
               </div>
               
               {/* Dynamic fields based on category */}

@@ -988,6 +988,14 @@ io.on("connection", (socket) => {
       const currentUserIdStr = String(currentUserId).trim();
       const targetUserIdStr = String(targetUserId).trim();
       
+      // Prevent calling yourself
+      if (currentUserIdStr === targetUserIdStr || 
+          currentUserIdStr.toLowerCase() === targetUserIdStr.toLowerCase()) {
+        console.error("❌ Cannot call yourself!");
+        socket.emit("call-error", { message: "Cannot call yourself" });
+        return;
+      }
+      
       console.log("📞 Call initiated:");
       console.log("   From:", currentUserIdStr);
       console.log("   To:", targetUserIdStr);
@@ -1022,8 +1030,9 @@ io.on("connection", (socket) => {
       // If still not found, try more aggressive search with multiple formats
       if (!receiverSocketId) {
         console.log("⚠️ Socket not found with getReceiverSocketId, trying manual search...");
-        console.log("   Searching for:", targetUserIdStr);
+        console.log("   Searching for:", targetUserIdStr, "(length:", targetUserIdStr.length, ")");
         console.log("   Available keys:", Object.keys(userSocketMap));
+        console.log("   Available keys details:", Object.keys(userSocketMap).map(k => `"${k}" (len:${k.length})`));
         console.log("   Full userSocketMap:", JSON.stringify(userSocketMap, null, 2));
         
         // Try all possible format variations
@@ -1035,9 +1044,11 @@ io.on("connection", (socket) => {
         ];
         
         for (const searchTerm of searchVariations) {
+          if (!searchTerm) continue;
+          const normalizedSearchTerm = String(searchTerm).trim();
+          
           for (const [mapUserId, mapSocketId] of Object.entries(userSocketMap)) {
             const normalizedMapUserId = String(mapUserId).trim();
-            const normalizedSearchTerm = String(searchTerm).trim();
             
             // Try exact match
             if (normalizedMapUserId === normalizedSearchTerm) {
@@ -1074,8 +1085,9 @@ io.on("connection", (socket) => {
               io.to(retrySocketId).emit("incoming-call", callData);
               socket.emit("call-sent", { targetUserId: targetUserIdStr, success: true });
             } else {
-              console.log("❌ Socket still not found after retry, broadcasting...");
-              io.emit("incoming-call", callData);
+              console.log("❌ Socket still not found after retry, broadcasting to all EXCEPT caller...");
+              // Broadcast to all sockets EXCEPT the caller's socket
+              socket.broadcast.emit("incoming-call", callData);
               socket.emit("call-error", { message: "User might not be online. Call broadcasted." });
             }
           }, 500);
@@ -1112,10 +1124,10 @@ io.on("connection", (socket) => {
           io.to(altReceiverSocketId).emit("incoming-call", callData);
           socket.emit("call-sent", { targetUserId: targetUserIdStr, success: true });
         } else {
-          console.log("❌ Receiver truly not found, trying broadcast...");
-          // Try broadcasting to all connected sockets - receiver might be connecting
-          io.emit("incoming-call", callData);
-          console.log("📢 Broadcasted incoming-call to all connected clients");
+          console.log("❌ Receiver truly not found, trying broadcast to all EXCEPT caller...");
+          // Broadcast to all sockets EXCEPT the caller's socket to avoid self-call
+          socket.broadcast.emit("incoming-call", callData);
+          console.log("📢 Broadcasted incoming-call to all connected clients (except caller)");
           socket.emit("call-error", { message: "User might not be online. Call broadcasted to all clients." });
         }
       }
@@ -1142,6 +1154,7 @@ io.on("connection", (socket) => {
           answer,
           callId,
           fromUserId: currentUserId,
+          targetUserId: targetUserId, // Include targetUserId for caller to identify
         });
         console.log("Emitted call-answered to caller:", receiverSocketId);
       } else {
