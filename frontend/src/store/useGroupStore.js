@@ -73,6 +73,22 @@ export const useGroupStore = create((set, get) => ({
     }
   },
 
+  changeGroupIcon: async (groupId, icon, iconType) => {
+    try {
+      const res = await axiosInstance.put(`/group/${groupId}/icon`, { icon, iconType });
+      set({ 
+        groups: get().groups.map(g => g._id === groupId ? res.data.group : g),
+        selectedGroup: res.data.group 
+      });
+      toast.success(`Group icon updated! ${res.data.pointsDeducted} points deducted.`);
+      return res.data;
+    } catch (error) {
+      const errorMsg = error.response?.data?.message || "Failed to change group icon";
+      toast.error(errorMsg);
+      return null;
+    }
+  },
+
   deleteGroup: async (groupId) => {
     try {
       await axiosInstance.delete(`/group/${groupId}`);

@@ -93,7 +93,7 @@ const GroupMembers = ({ groupId, onClose }) => {
                     member.fullName
                   )}
                 </div>
-                {!member.isSuspicious && member.email && (
+                {member.email && (
                   <div className="text-sm text-base-content/70">
                     {member.email}
                   </div>

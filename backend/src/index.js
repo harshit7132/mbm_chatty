@@ -39,7 +39,11 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://localhost:5173"],
+    origin: [
+      "http://localhost:5173", 
+      "https://localhost:5173",
+      process.env.FRONTEND_URL
+    ].filter(Boolean), // Remove undefined values
     credentials: true,
   })
 );

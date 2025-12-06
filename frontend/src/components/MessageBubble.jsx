@@ -13,6 +13,7 @@ import {
   X,
   Video,
   Phone,
+  AlertTriangle,
 } from "lucide-react";
 
 const EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
@@ -46,10 +47,11 @@ const MessageBubble = ({ message, selectedUser }) => {
   const senderInfo = typeof message.senderId === 'object' && message.senderId
     ? message.senderId
     : null;
+  const isSuspiciousSender = senderInfo?.isSuspicious || senderInfo?.fullName === "Suspicious";
   const senderName = senderInfo 
     ? (senderInfo.fullName || senderInfo.username || senderInfo.email?.split("@")[0] || "User")
     : (selectedUser?.fullName || selectedUser?.username || "User");
-  const senderAvatar = senderInfo
+  const senderAvatar = senderInfo && !isSuspiciousSender
     ? (senderInfo.profilePic || senderInfo.avatar || "/avatar.png")
     : (selectedUser?.profilePic || "/avatar.png");
   
@@ -111,21 +113,27 @@ const MessageBubble = ({ message, selectedUser }) => {
     >
       <div className="chat-image avatar">
         <div className="size-10 rounded-full border">
-          <img
-            src={
-              isOwnMessage
-                ? authUser.profilePic || "/avatar.png"
-                : senderAvatar
-            }
-            alt="profile pic"
-          />
+          {isSuspiciousSender && !isOwnMessage ? (
+            <div className="bg-error/20 flex items-center justify-center w-full h-full rounded-full">
+              <AlertTriangle size={20} className="text-error" />
+            </div>
+          ) : (
+            <img
+              src={
+                isOwnMessage
+                  ? authUser.profilePic || "/avatar.png"
+                  : senderAvatar
+              }
+              alt="profile pic"
+            />
+          )}
         </div>
       </div>
 
       <div className="chat-header mb-1">
         {/* Show sender name for group messages (not own messages) */}
         {isGroupMessage && !isOwnMessage && (
-          <span className="text-xs font-semibold opacity-70 mr-2">
+          <span className={`text-xs font-semibold opacity-70 mr-2 ${isSuspiciousSender ? "text-error" : ""}`}>
             {senderName}
           </span>
         )}

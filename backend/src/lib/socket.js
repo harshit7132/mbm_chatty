@@ -225,20 +225,61 @@ io.on("connection", (socket) => {
           .populate("senderId", "fullName username email profilePic avatar")
           .populate("replyTo");
 
-        // Add chatId to message for frontend
-        const messageWithChatId = {
-          ...populatedMessage.toObject(),
-          chatId: chatId,
-          groupId: actualGroupId,
-        };
+        const baseMessage = populatedMessage.toObject();
+        const isGroupOwner = group.createdBy.toString() === currentUserId.toString();
+        const senderId = baseMessage.senderId._id.toString();
 
-        // Emit to all group members
-        group.members.forEach((memberId) => {
+        // Emit to all group members with visibility logic
+        for (const memberId of group.members) {
           const memberSocketId = getReceiverSocketId(memberId.toString());
-          if (memberSocketId) {
-            io.to(memberSocketId).emit("new-message", messageWithChatId);
+          if (!memberSocketId) continue;
+
+          const memberIdStr = memberId.toString();
+          const isCurrentUser = memberIdStr === currentUserId.toString();
+          
+          // Get member's friends list for visibility check
+          let canSeeSender = isGroupOwner || isCurrentUser;
+          
+          if (!canSeeSender) {
+            try {
+              const memberUser = await User.findById(memberId).select("friends");
+              if (memberUser && memberUser.friends) {
+                const friendsListStr = memberUser.friends.map(f => {
+                  if (!f) return null;
+                  if (f._id) return f._id.toString();
+                  if (typeof f === 'string') return f;
+                  return f.toString();
+                }).filter(Boolean);
+                
+                canSeeSender = friendsListStr.includes(senderId);
+              }
+            } catch (err) {
+              console.log("Error checking friend status:", err.message);
+            }
           }
-        });
+
+          // Create personalized message for this recipient
+          const messageWithChatId = {
+            ...baseMessage,
+            chatId: chatId,
+            groupId: actualGroupId,
+          };
+
+          // Hide sender info if recipient can't see it
+          if (!canSeeSender && messageWithChatId.senderId) {
+            messageWithChatId.senderId = {
+              _id: messageWithChatId.senderId._id,
+              fullName: "Suspicious",
+              username: null,
+              email: null,
+              profilePic: "",
+              avatar: "",
+              isSuspicious: true,
+            };
+          }
+
+          io.to(memberSocketId).emit("new-message", messageWithChatId);
+        }
 
         // Update challenge progress for this specific user (user-specific progress)
         try {

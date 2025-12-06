@@ -103,10 +103,29 @@ const Groups = () => {
             >
               <div className="card-body">
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="avatar placeholder">
-                    <div className="bg-primary text-primary-content rounded-full w-12">
-                      <Users size={24} />
-                    </div>
+                  <div className="avatar">
+                    {group.groupIcon ? (
+                      group.groupIconType === "video" ? (
+                        <video
+                          src={group.groupIcon}
+                          className="w-12 h-12 rounded-full object-cover"
+                          autoPlay
+                          loop
+                          muted
+                          playsInline
+                        />
+                      ) : (
+                        <img
+                          src={group.groupIcon}
+                          alt={group.name}
+                          className="w-12 h-12 rounded-full object-cover"
+                        />
+                      )
+                    ) : (
+                      <div className="bg-primary text-primary-content rounded-full w-12 flex items-center justify-center">
+                        <Users size={24} />
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1">
                     <h3 className="card-title text-lg">{group.name}</h3>

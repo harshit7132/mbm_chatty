@@ -36,6 +36,15 @@ const groupSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    groupIcon: {
+      type: String,
+      default: "",
+    },
+    groupIconType: {
+      type: String,
+      enum: ["image", "gif", "video"],
+      default: "image",
+    },
   },
   { timestamps: true }
 );

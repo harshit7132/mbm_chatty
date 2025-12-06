@@ -6,16 +6,13 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "https://your-backend-url.vercel.app/api/$1"
+      "source": "/api/:path*",
+      "destination": "https://mbmchaty-production.up.railway.app/api/:path*"
     },
     {
       "source": "/(.*)",
       "destination": "/index.html"
     }
-  ],
-  "env": {
-    "VITE_API_URL": "@vite_api_url"
-  }
+  ]
 }
 

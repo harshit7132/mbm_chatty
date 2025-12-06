@@ -1,18 +1,20 @@
-import { X, Video, Phone, Settings, Users } from "lucide-react";
+import { X, Video, Phone, Settings, Users, Image as ImageIcon } from "lucide-react";
 import { useAuthStore } from "../store/useAuthStore";
 import { useChatStore } from "../store/useChatStore";
 import { useGroupStore } from "../store/useGroupStore";
 import { useCallStore } from "../store/useCallStore";
 import GroupMembers from "./GroupMembers";
 import toast from "react-hot-toast";
-import { useState } from "react";
+import { useState, useRef } from "react";
 
 const ChatHeader = () => {
   const { selectedUser, setSelectedUser, selectedChat } = useChatStore();
-  const { selectedGroup, updateGroupSettings } = useGroupStore();
+  const { selectedGroup, updateGroupSettings, changeGroupIcon } = useGroupStore();
   const { onlineUsers, socket, authUser } = useAuthStore();
   const { setActiveCall } = useCallStore();
   const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const fileInputRef = useRef(null);
+  const [isUploadingIcon, setIsUploadingIcon] = useState(false);
 
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailMessage, setEmailMessage] = useState("");
@@ -266,10 +268,82 @@ const ChatHeader = () => {
     await updateGroupSettings(selectedGroup._id, { onlyAdminsCanSendMessages: newValue });
   };
 
+  const handleIconFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedGroup) return;
+
+    setIsUploadingIcon(true);
+    try {
+      // Determine file type
+      let iconType = "image";
+      if (file.type === "image/gif") {
+        iconType = "gif";
+      } else if (file.type === "video/mp4") {
+        iconType = "video";
+        
+        // Validate video duration (5-10 seconds)
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        
+        await new Promise((resolve, reject) => {
+          video.onloadedmetadata = () => {
+            window.URL.revokeObjectURL(video.src);
+            const duration = video.duration;
+            if (duration < 5 || duration > 10) {
+              reject(new Error("Video must be between 5 and 10 seconds"));
+            } else {
+              resolve();
+            }
+          };
+          video.onerror = () => reject(new Error("Failed to load video"));
+          video.src = URL.createObjectURL(file);
+        });
+      } else if (!file.type.startsWith("image/")) {
+        toast.error("Invalid file type. Please select an image, GIF, or MP4 video");
+        setIsUploadingIcon(false);
+        return;
+      }
+
+      // Convert file to base64
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const base64String = reader.result;
+          await changeGroupIcon(selectedGroup._id, base64String, iconType);
+        } catch (error) {
+          console.error("Error uploading icon:", error);
+          toast.error(error.message || "Failed to upload group icon");
+        } finally {
+          setIsUploadingIcon(false);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+        }
+      };
+      reader.onerror = () => {
+        toast.error("Failed to read file");
+        setIsUploadingIcon(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error("Error processing file:", error);
+      toast.error(error.message || "Failed to process file");
+      setIsUploadingIcon(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
   const isGroupAdmin = selectedGroup && (
     selectedGroup.admins?.some(admin => 
       (typeof admin === 'object' ? admin._id : admin) === authUser._id
     ) || selectedGroup.createdBy === authUser._id
+  );
+
+  const isGroupOwner = selectedGroup && (
+    selectedGroup.createdBy === authUser._id ||
+    (typeof selectedGroup.createdBy === 'object' && selectedGroup.createdBy._id === authUser._id)
   );
 
   if (!selectedUser && !selectedGroup) return null;
@@ -287,10 +361,45 @@ const ChatHeader = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {/* Group Avatar */}
-              <div className="avatar">
-                <div className="size-10 rounded-full bg-primary/20 flex items-center justify-center">
-                  <Users size={20} className="text-primary" />
-                </div>
+              <div className="avatar relative">
+                {selectedGroup.groupIcon ? (
+                  selectedGroup.groupIconType === "video" ? (
+                    <video
+                      src={selectedGroup.groupIcon}
+                      className="size-10 rounded-full object-cover"
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                    />
+                  ) : (
+                    <img
+                      src={selectedGroup.groupIcon}
+                      alt={selectedGroup.name}
+                      className="size-10 rounded-full object-cover"
+                    />
+                  )
+                ) : (
+                  <div className="size-10 rounded-full bg-primary/20 flex items-center justify-center">
+                    <Users size={20} className="text-primary" />
+                  </div>
+                )}
+                {isGroupOwner && (
+                  <label
+                    className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
+                    title="Change group icon (Owner only)"
+                  >
+                    <ImageIcon size={16} className="text-white" />
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*,video/mp4"
+                      className="hidden"
+                      onChange={handleIconFileSelect}
+                      disabled={isUploadingIcon}
+                    />
+                  </label>
+                )}
               </div>
 
               {/* Group info - Clickable to view members */}
@@ -334,7 +443,7 @@ const ChatHeader = () => {
 
           {/* Group Settings Panel */}
           {showGroupSettings && isGroupAdmin && (
-            <div className="mt-2 p-3 bg-base-200 rounded-lg">
+            <div className="mt-2 p-3 bg-base-200 rounded-lg space-y-3">
               <label className="label cursor-pointer">
                 <span className="label-text">Only admins can send messages</span>
                 <input
@@ -344,6 +453,34 @@ const ChatHeader = () => {
                   onChange={handleToggleGroupSetting}
                 />
               </label>
+              <div className="divider my-2"></div>
+              {isGroupOwner && (
+                <div>
+                  <label className="label">
+                    <span className="label-text">Group Icon (Owner only)</span>
+                  </label>
+                  <label className="btn btn-sm btn-outline w-full cursor-pointer" disabled={isUploadingIcon}>
+                    {isUploadingIcon ? (
+                      <span className="loading loading-spinner loading-sm"></span>
+                    ) : (
+                      <>
+                        <ImageIcon size={16} />
+                        Change Icon
+                      </>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*,video/mp4"
+                      className="hidden"
+                      onChange={handleIconFileSelect}
+                      disabled={isUploadingIcon}
+                    />
+                  </label>
+                  <p className="text-xs text-base-content/70 mt-1">
+                    Image: 2 points | GIF/Video: 5 points (Video: 5-10 seconds)
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>
