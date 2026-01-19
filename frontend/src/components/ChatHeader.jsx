@@ -380,9 +380,9 @@ const ChatHeader = () => {
                     />
                   )
                 ) : (
-                  <div className="size-10 rounded-full bg-primary/20 flex items-center justify-center">
-                    <Users size={20} className="text-primary" />
-                  </div>
+                <div className="size-10 rounded-full bg-primary/20 flex items-center justify-center">
+                  <Users size={20} className="text-primary" />
+                </div>
                 )}
                 {isGroupOwner && (
                   <label

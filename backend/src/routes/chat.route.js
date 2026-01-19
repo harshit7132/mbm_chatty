@@ -121,10 +121,19 @@ router.get("/:chatId/messages", protectRoute, async (req, res) => {
       .populate("replyTo")
       .sort({ createdAt: 1 });
 
+
+    console.log("📥 [GET MESSAGES] Retrieved from DB:", {
+      count: messages.length,
+      lastMsgId: messages[messages.length - 1]?._id,
+      lastMsgHasImages: !!messages[messages.length - 1]?.images,
+      lastMsgImages: messages[messages.length - 1]?.images
+    });
+
     res.status(200).json(messages);
   } catch (error) {
-    console.log("Error in getMessages:", error.message);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("❌ Error in getMessages:", error.message);
+    console.error("❌ Full error:", error);
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
   }
 });
 
@@ -138,22 +147,31 @@ router.post("/forward", protectRoute, async (req, res) => {
       return res.status(400).json({ message: "Message ID and chat IDs are required" });
     }
 
-    const originalMessage = await Message.findById(messageId);
+    const originalMessage = await Message.findById(messageId).populate("senderId", "fullName username email");
     if (!originalMessage) {
       return res.status(404).json({ message: "Message not found" });
     }
+
+    const originalSender = originalMessage.senderId;
+    const originalSenderName = originalSender.fullName || originalSender.username || originalSender.email?.split("@")[0];
 
     // Forward to each chat
     for (const chatId of chatIds) {
       const parts = chatId.split("_");
       if (parts.length === 3 && parts[0] === "chat") {
         const receiverId = parts[1] === myId.toString() ? parts[2] : parts[1];
+
+        // Check if receiver and original sender are friends
+        const receiver = await User.findById(receiverId);
+        const areFriends = receiver.friends?.includes(originalSender._id.toString());
+
         const forwardedMessage = new Message({
           senderId: myId,
           receiverId,
           text: originalMessage.text,
           image: originalMessage.image,
-          forwardedFrom: originalMessage._id,
+          images: originalMessage.images || [],
+          forwardedFromName: areFriends ? originalSenderName : "Anonymous",
         });
         await forwardedMessage.save();
       }

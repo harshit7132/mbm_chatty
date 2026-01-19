@@ -18,6 +18,7 @@ const SignUpPage = () => {
     fullName: "",
     email: "",
     password: "",
+    preferredLanguage: "en", // Default to English
   });
 
   // Get referral code from URL if present
@@ -35,7 +36,7 @@ const SignUpPage = () => {
     if (!formData.fullName.trim()) return toast.error("Full name is required");
     if (!formData.email.trim()) return toast.error("Email is required");
     if (!/\S+@\S+\.\S+/.test(formData.email)) return toast.error("Invalid email format");
-    
+
     if (!useOTP) {
       if (!formData.password) return toast.error("Password is required");
       if (formData.password.length < 6) return toast.error("Password must be at least 6 characters");
@@ -88,7 +89,7 @@ const SignUpPage = () => {
           ...formData,
           referralCode: referralCode.trim() || undefined, // Only include if not empty
         };
-        
+
         if (useOTP) {
           // Signup with OTP (no password required)
           await signup({ ...signupData, password: "otp-verified", otp });
@@ -296,6 +297,26 @@ const SignUpPage = () => {
                 )}
               </>
             )}
+
+            {/* Language Preference */}
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text font-medium">Preferred Language</span>
+              </label>
+              <select
+                className="select select-bordered w-full"
+                value={formData.preferredLanguage}
+                onChange={(e) => setFormData({ ...formData, preferredLanguage: e.target.value })}
+              >
+                <option value="en">English</option>
+                <option value="hi">हिन्दी (Hindi)</option>
+              </select>
+              <label className="label">
+                <span className="label-text-alt text-info">
+                  Choose your preferred language for messages
+                </span>
+              </label>
+            </div>
 
             <div className="flex items-center justify-center">
               <button

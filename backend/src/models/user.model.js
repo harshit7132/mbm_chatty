@@ -60,7 +60,7 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
-    
+
     // Badges system
     badges: [
       {
@@ -299,6 +299,12 @@ const userSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
+    // Preferred language for translation
+    preferredLanguage: {
+      type: String,
+      enum: ['en', 'hi'],
+      default: 'en',
+    },
   },
   { timestamps: true }
 );

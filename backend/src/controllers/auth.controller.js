@@ -22,27 +22,27 @@ export const signup = async (req, res) => {
       // Use a random password for OTP-verified accounts
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash("otp-verified-" + Date.now(), salt);
-      
+
       const user = await User.findOne({ email });
       if (user) return res.status(400).json({ message: "Email already exists" });
 
-    // Check for referral code
-    const referralCode = req.body.referralCode || req.query.ref;
-    
-    const newUser = new User({
-      fullName,
-      email,
-      password: hashedPassword,
-    });
+      // Check for referral code
+      const referralCode = req.body.referralCode || req.query.ref;
 
-    // Don't auto-generate referral code - user will create their own via /api/engagement/referral/create
+      const newUser = new User({
+        fullName,
+        email,
+        password: hashedPassword,
+      });
 
-    // Apply referral if provided
+      // Don't auto-generate referral code - user will create their own via /api/engagement/referral/create
+
+      // Apply referral if provided
       if (referralCode) {
         const referrer = await User.findOne({ referralCode });
         if (referrer && referrer._id.toString() !== newUser._id.toString()) {
           newUser.referredBy = referrer._id;
-          
+
           // Reward referrer (50 points)
           const referrerReward = 50;
           referrer.points = (referrer.points || 0) + referrerReward;
@@ -111,7 +111,7 @@ export const signup = async (req, res) => {
 
     // Check for referral code
     const referralCode = req.body.referralCode || req.query.ref;
-    
+
     const newUser = new User({
       fullName,
       email,
@@ -125,7 +125,7 @@ export const signup = async (req, res) => {
       const referrer = await User.findOne({ referralCode });
       if (referrer && referrer._id.toString() !== newUser._id.toString()) {
         newUser.referredBy = referrer._id;
-        
+
         // Reward referrer (50 points)
         const referrerReward = 50;
         referrer.points = (referrer.points || 0) + referrerReward;
@@ -182,7 +182,7 @@ export const signup = async (req, res) => {
   } catch (error) {
     console.error("Error in signup controller:", error);
     console.error("Error stack:", error.stack);
-    res.status(500).json({ 
+    res.status(500).json({
       message: "Internal Server Error",
       error: process.env.NODE_ENV === "development" ? error.message : undefined
     });
@@ -210,8 +210,8 @@ export const login = async (req, res) => {
     // Check if user has a password
     if (!user.password) {
       console.log(`Login attempt failed: User ${normalizedEmail} has no password (OTP account)`);
-      return res.status(400).json({ 
-        message: "This account was created with OTP. Please use OTP login instead." 
+      return res.status(400).json({
+        message: "This account was created with OTP. Please use OTP login instead."
       });
     }
 
@@ -269,20 +269,51 @@ export const logout = (req, res) => {
 
 export const updateProfile = async (req, res) => {
   try {
-    const { profilePic } = req.body;
+    const { profilePic, preferredLanguage } = req.body;
     const userId = req.user._id;
 
-    if (!profilePic) {
-      return res.status(400).json({ message: "Profile pic is required" });
+    if (!profilePic && !preferredLanguage) {
+      return res.status(400).json({ message: "No updates provided" });
     }
 
-    const uploadResponse = await cloudinary.uploader.upload(profilePic);
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { profilePic: uploadResponse.secure_url },
-      { new: true }
-    );
+    let updateData = {};
 
+    if (profilePic) {
+      const uploadResponse = await cloudinary.uploader.upload(profilePic);
+      updateData.profilePic = uploadResponse.secure_url;
+      updateData.avatar = uploadResponse.secure_url;
+    }
+
+    if (preferredLanguage) {
+      const user = await User.findById(userId);
+
+      if (user.preferredLanguage && user.preferredLanguage !== preferredLanguage) {
+        const userPoints = user.points || user.totalPoints || 0;
+
+        if (userPoints < 50) {
+          return res.status(400).json({
+            message: "You need 50 points to change your language preference"
+          });
+        }
+
+        updateData.points = userPoints - 50;
+        updateData.totalPoints = (user.totalPoints || 0) - 50;
+        updateData.pointsSpent = (user.pointsSpent || 0) + 50;
+
+        const pointsHistory = user.pointsHistory || [];
+        pointsHistory.push({
+          type: "spent",
+          amount: -50,
+          description: "Changed language preference",
+          timestamp: new Date(),
+        });
+        updateData.pointsHistory = pointsHistory;
+      }
+
+      updateData.preferredLanguage = preferredLanguage;
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, { new: true });
     res.status(200).json(updatedUser);
   } catch (error) {
     console.log("error in update profile:", error);
@@ -365,10 +396,10 @@ export const verifyOTP = async (req, res) => {
     const normalizedOTP = otp.toString().trim();
 
     // Find OTP document
-    const otpDoc = await OTP.findOne({ 
-      email: normalizedEmail, 
-      otp: normalizedOTP, 
-      verified: false 
+    const otpDoc = await OTP.findOne({
+      email: normalizedEmail,
+      otp: normalizedOTP,
+      verified: false
     });
 
     if (!otpDoc) {
@@ -414,9 +445,9 @@ export const loginWithOTP = async (req, res) => {
     const normalizedEmail = email.toLowerCase().trim();
 
     // Find OTP (verified or not - we'll verify it now)
-    let otpDoc = await OTP.findOne({ 
-      email: normalizedEmail, 
-      otp: otp.toString().trim() 
+    let otpDoc = await OTP.findOne({
+      email: normalizedEmail,
+      otp: otp.toString().trim()
     });
 
     if (!otpDoc) {
@@ -449,7 +480,7 @@ export const loginWithOTP = async (req, res) => {
       // Create new user if doesn't exist (passwordless signup)
       // Check for referral code
       const referralCode = req.body.referralCode || req.query.ref;
-      
+
       user = new User({
         fullName: normalizedEmail.split("@")[0], // Use email prefix as name
         email: normalizedEmail,
@@ -463,7 +494,7 @@ export const loginWithOTP = async (req, res) => {
         const referrer = await User.findOne({ referralCode });
         if (referrer && referrer._id.toString() !== user._id.toString()) {
           user.referredBy = referrer._id;
-          
+
           // Reward referrer (50 points)
           const referrerReward = 50;
           referrer.points = (referrer.points || 0) + referrerReward;
@@ -545,12 +576,12 @@ export const loginWithOTP = async (req, res) => {
         const yesterday = new Date(todayForOTP);
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayStr = yesterday.toISOString().split('T')[0];
-        
+
         const yesterdayActivity = user.dailyActivity.find(a => {
           const aDate = new Date(a.date).toISOString().split('T')[0];
           return aDate === yesterdayStr && a.isActive;
         });
-        
+
         if (yesterdayActivity) {
           user.consecutiveDaysActive = (user.consecutiveDaysActive || 0) + 1;
         } else {
@@ -562,14 +593,14 @@ export const loginWithOTP = async (req, res) => {
       // Check for 5-day streak milestone reward (5, 10, 15, 20, etc.)
       const currentStreak = user.consecutiveDaysActive || 0;
       const lastMilestone = user.lastStreakRewardMilestone || 0;
-      
+
       if (currentStreak > 0 && currentStreak % 5 === 0 && currentStreak > lastMilestone) {
         // User reached a new 5-day milestone (5, 10, 15, 20, etc.)
         const rewardPoints = 3;
         user.points = (user.points || 0) + rewardPoints;
         user.totalPoints = (user.totalPoints || 0) + rewardPoints;
         user.lastStreakRewardMilestone = currentStreak;
-        
+
         // Add to points history
         if (!user.pointsHistory) {
           user.pointsHistory = [];

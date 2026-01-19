@@ -20,8 +20,20 @@ const messageSchema = new mongoose.Schema(
     text: {
       type: String,
     },
+    originalText: {
+      type: String, // Store original message text
+    },
+    originalLang: {
+      type: String, // 'en' or 'hi' - language of original message
+      enum: ['en', 'hi', null],
+      default: null,
+    },
     image: {
       type: String,
+    },
+    images: {
+      type: [String],
+      default: [],
     },
     sticker: {
       type: String,
@@ -56,6 +68,10 @@ const messageSchema = new mongoose.Schema(
     callStatus: {
       type: String,
       enum: ["started", "ended", "missed", null],
+      default: null,
+    },
+    forwardedFromName: {
+      type: String,
       default: null,
     },
   },

@@ -2,23 +2,28 @@ import { useRef, useState, useEffect } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { useGroupStore } from "../store/useGroupStore";
 import { useAuthStore } from "../store/useAuthStore";
-import { Image, Send, X, Reply, Smile } from "lucide-react";
+import { Image, Send, X, Reply, Smile, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
 import StickerPicker from "./StickerPicker";
+import GifPicker from "./GifPicker";
 
 const MessageInput = () => {
   const [text, setText] = useState("");
-  const [imagePreview, setImagePreview] = useState(null);
+  const [imagePreviews, setImagePreviews] = useState([]);
+  const [gifPreview, setGifPreview] = useState(null);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef(null);
   const { sendMessage, replyingTo, setReplyingTo, sendTypingIndicator, editingMessage, setEditingMessage, selectedChat } = useChatStore();
   const { selectedGroup } = useGroupStore();
   const { authUser } = useAuthStore();
   const typingTimeoutRef = useRef(null);
-  
+
   // Check if user can send messages in group
-  const canSendMessage = !selectedGroup || !selectedGroup.onlyAdminsCanSendMessages || 
-    selectedGroup.admins?.some(admin => 
+  const canSendMessage = !selectedGroup || !selectedGroup.onlyAdminsCanSendMessages ||
+    selectedGroup.admins?.some(admin =>
       (typeof admin === 'object' ? admin._id : admin) === authUser._id
     ) || selectedGroup.createdBy === authUser._id;
 
@@ -29,22 +34,44 @@ const MessageInput = () => {
   }, [editingMessage]);
 
   const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+    const files = Array.from(e.target.files);
+
+    // Validate total count (existing + new)
+    if (imagePreviews.length + files.length > 5) {
+      toast.error("You can only upload up to 5 images per message");
       return;
     }
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setImagePreview(reader.result);
-    };
-    reader.readAsDataURL(file);
+    // Validate each file is an image
+    const invalidFiles = files.filter(file => !file.type.startsWith("image/"));
+    if (invalidFiles.length > 0) {
+      toast.error("Please select only image files");
+      return;
+    }
+
+    // Convert all files to base64
+    const fileReaders = files.map(file => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    });
+
+    Promise.all(fileReaders)
+      .then(base64Results => {
+        setImagePreviews(prev => [...prev, ...base64Results]);
+      })
+      .catch(error => {
+        console.error("Error reading files:", error);
+        toast.error("Failed to read image files");
+      });
   };
 
-  const removeImage = () => {
-    setImagePreview(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const removeImage = (index) => {
+    setImagePreviews(prev => prev.filter((_, i) => i !== index));
+    // Don't clear fileInputRef as we want to allow adding more images
   };
 
   const handleTyping = () => {
@@ -52,10 +79,10 @@ const MessageInput = () => {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    
+
     // Send typing indicator immediately
     sendTypingIndicator();
-    
+
     // Set timeout to send typing indicator again after a short delay
     // This ensures the indicator stays active while user is typing
     typingTimeoutRef.current = setTimeout(() => {
@@ -66,7 +93,7 @@ const MessageInput = () => {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!text.trim() && !imagePreview) return;
+    if (!text.trim() && imagePreviews.length === 0 && !gifPreview) return;
 
     // Check if user can send messages in group
     if (selectedGroup && !canSendMessage) {
@@ -75,19 +102,24 @@ const MessageInput = () => {
     }
 
     try {
+      setIsSending(true);
       await sendMessage({
         text: text.trim(),
-        image: imagePreview,
+        images: imagePreviews, // Send array of images
+        image: gifPreview, // GIF URL (legacy single image field)
         replyTo: replyingTo?._id,
       });
 
       // Clear form
       setText("");
-      setImagePreview(null);
+      setImagePreviews([]);
+      setGifPreview(null);
       setReplyingTo(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (error) {
       console.error("Failed to send message:", error);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -97,6 +129,37 @@ const MessageInput = () => {
       sticker: sticker.image,
     });
     setShowStickerPicker(false);
+  };
+
+  const handleSelectGif = (gifUrl) => {
+    setGifPreview(gifUrl);
+    setShowGifPicker(false);
+  };
+
+  const removeGif = () => {
+    setGifPreview(null);
+  };
+
+  const handleTextChange = (e) => {
+    const value = e.target.value;
+    setText(value);
+
+    // Detect slash command
+    if (value === "/") {
+      setShowSlashMenu(true);
+    } else {
+      setShowSlashMenu(false);
+    }
+
+    handleTyping();
+  };
+
+  const handleSlashCommand = (command) => {
+    if (command === "gif") {
+      setShowGifPicker(true);
+      setText(""); // Clear the slash
+    }
+    setShowSlashMenu(false);
   };
 
   return (
@@ -133,16 +196,50 @@ const MessageInput = () => {
         </div>
       )}
 
-      {imagePreview && (
+      {imagePreviews.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {imagePreviews.map((preview, index) => (
+            <div key={index} className="relative">
+              <img
+                src={preview}
+                alt={`Preview ${index + 1}`}
+                className="w-20 h-20 object-cover rounded-lg border border-zinc-700"
+              />
+              <button
+                onClick={() => removeImage(index)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-base-300
+                flex items-center justify-center hover:bg-error hover:text-error-content transition-colors"
+                type="button"
+                title="Remove image"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+          {imagePreviews.length < 5 && (
+            <button
+              type="button"
+              className="w-20 h-20 rounded-lg border-2 border-dashed border-zinc-700 
+              flex items-center justify-center hover:border-primary transition-colors"
+              onClick={() => fileInputRef.current?.click()}
+              title={`Add more images (${5 - imagePreviews.length} remaining)`}
+            >
+              <Image size={20} className="opacity-50" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {gifPreview && (
         <div className="mb-3 flex items-center gap-2">
           <div className="relative">
             <img
-              src={imagePreview}
-              alt="Preview"
-              className="w-20 h-20 object-cover rounded-lg border border-zinc-700"
+              src={gifPreview}
+              alt="GIF Preview"
+              className="w-32 h-32 object-cover rounded-lg border border-zinc-700"
             />
             <button
-              onClick={removeImage}
+              onClick={removeGif}
               className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-base-300
               flex items-center justify-center"
               type="button"
@@ -158,16 +255,14 @@ const MessageInput = () => {
           <input
             type="text"
             className="w-full input input-bordered rounded-lg input-sm sm:input-md"
-            placeholder={editingMessage ? "Edit message..." : "Type a message..."}
+            placeholder={editingMessage ? "Edit message..." : "Type a message or / for commands..."}
             value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              handleTyping();
-            }}
+            onChange={handleTextChange}
           />
           <input
             type="file"
             accept="image/*"
+            multiple
             className="hidden"
             ref={fileInputRef}
             onChange={handleImageChange}
@@ -176,7 +271,7 @@ const MessageInput = () => {
           <button
             type="button"
             className={`hidden sm:flex btn btn-circle
-                     ${imagePreview ? "text-emerald-500" : "text-zinc-400"}`}
+                     ${imagePreviews.length > 0 ? "text-emerald-500" : "text-zinc-400"}`}
             onClick={() => fileInputRef.current?.click()}
             title="Attach Image"
           >
@@ -194,11 +289,27 @@ const MessageInput = () => {
         </div>
         <button
           type="submit"
-          className="btn btn-sm btn-circle"
-          disabled={(!text.trim() && !imagePreview) || (selectedGroup && !canSendMessage)}
+          className={`btn btn-sm btn-circle ${isSending ? 'loading' : ''}`}
+          disabled={(!text.trim() && imagePreviews.length === 0 && !gifPreview) || (selectedGroup && !canSendMessage) || isSending}
         >
-          <Send size={22} />
+          {!isSending && <Send size={22} />}
         </button>
+
+        {showSlashMenu && (
+          <div className="absolute bottom-full left-0 mb-2 bg-base-200 rounded-lg shadow-lg p-2 z-50 min-w-[200px]">
+            <button
+              type="button"
+              onClick={() => handleSlashCommand("gif")}
+              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-base-300 rounded-lg transition-colors text-left"
+            >
+              <Sparkles size={16} />
+              <div>
+                <div className="font-medium text-sm">Send GIF</div>
+                <div className="text-xs opacity-70">Search and send GIFs</div>
+              </div>
+            </button>
+          </div>
+        )}
 
         {showStickerPicker && (
           <div className="absolute bottom-full right-0 mb-2 z-50">
@@ -209,6 +320,13 @@ const MessageInput = () => {
           </div>
         )}
       </form>
+
+      {showGifPicker && (
+        <GifPicker
+          onSelectGif={handleSelectGif}
+          onClose={() => setShowGifPicker(false)}
+        />
+      )}
     </div>
   );
 };

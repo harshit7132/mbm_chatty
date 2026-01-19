@@ -115,11 +115,11 @@ export const useChatStore = create((set, get) => ({
     if (!selectedChat || !selectedChat._id) {
       return;
     }
-    
+
     try {
       const chatId = selectedChat._id;
       const currentMessages = get().messages;
-      
+
       // Get the timestamp of the last message, or use a time 1 minute ago if no messages
       let lastMessageTime;
       if (currentMessages.length > 0) {
@@ -128,9 +128,9 @@ export const useChatStore = create((set, get) => ({
       } else {
         lastMessageTime = new Date(Date.now() - 60000); // 1 minute ago
       }
-      
+
       console.log("🔄 Syncing messages from MongoDB, after:", lastMessageTime.toISOString());
-      
+
       // Fetch messages newer than the last message we have
       let newMessages = [];
       if (chatId && chatId.startsWith("group_")) {
@@ -141,7 +141,7 @@ export const useChatStore = create((set, get) => ({
         const res = await axiosInstance.get(`/chat/${chatId}/messages?after=${lastMessageTime.toISOString()}`);
         newMessages = res.data || [];
       }
-      
+
       if (newMessages.length > 0) {
         console.log(`✅ Synced ${newMessages.length} new messages from MongoDB`);
         // Merge new messages, avoiding duplicates by ID and optimistic messages
@@ -150,49 +150,49 @@ export const useChatStore = create((set, get) => ({
             .map(m => m._id?.toString())
             .filter(id => id) // Remove undefined/null
         );
-        
+
         // Also check for optimistic messages that might match
         const uniqueNewMessages = newMessages.filter(m => {
           const msgId = m._id?.toString();
           if (!msgId) return false;
-          
+
           // Skip if already exists by ID
           if (existingIds.has(msgId)) {
             return false;
           }
-          
+
           // Check if this matches an optimistic message (to replace it instead of adding)
           const matchesOptimistic = currentMessages.some(msg => {
             if (!msg.isOptimistic) return false;
-            
-            const textMatch = (!msg.text && !m.text) || 
-                             (msg.text && m.text && msg.text.trim() === m.text.trim());
-            const senderMatch = (msg.senderId?._id?.toString() || msg.senderId?.toString()) === 
-                               (m.senderId?._id?.toString() || m.senderId?.toString());
+
+            const textMatch = (!msg.text && !m.text) ||
+              (msg.text && m.text && msg.text.trim() === m.text.trim());
+            const senderMatch = (msg.senderId?._id?.toString() || msg.senderId?.toString()) ===
+              (m.senderId?._id?.toString() || m.senderId?.toString());
             const timeDiff = Math.abs(
-              new Date(msg.createdAt || 0).getTime() - 
+              new Date(msg.createdAt || 0).getTime() -
               new Date(m.createdAt || 0).getTime()
             );
-            
+
             return textMatch && senderMatch && timeDiff < 30000;
           });
-          
+
           // If it matches an optimistic message, we'll replace it, so don't add as new
           if (matchesOptimistic) {
             // Replace the optimistic message
             const optimisticMsg = currentMessages.find(msg => {
               if (!msg.isOptimistic) return false;
-              const textMatch = (!msg.text && !m.text) || 
-                               (msg.text && m.text && msg.text.trim() === m.text.trim());
-              const senderMatch = (msg.senderId?._id?.toString() || msg.senderId?.toString()) === 
-                                 (m.senderId?._id?.toString() || m.senderId?.toString());
+              const textMatch = (!msg.text && !m.text) ||
+                (msg.text && m.text && msg.text.trim() === m.text.trim());
+              const senderMatch = (msg.senderId?._id?.toString() || msg.senderId?.toString()) ===
+                (m.senderId?._id?.toString() || m.senderId?.toString());
               const timeDiff = Math.abs(
-                new Date(msg.createdAt || 0).getTime() - 
+                new Date(msg.createdAt || 0).getTime() -
                 new Date(m.createdAt || 0).getTime()
               );
               return textMatch && senderMatch && timeDiff < 30000;
             });
-            
+
             if (optimisticMsg) {
               const optimisticIndex = currentMessages.indexOf(optimisticMsg);
               const updatedMessages = [...currentMessages];
@@ -201,10 +201,10 @@ export const useChatStore = create((set, get) => ({
             }
             return false; // Don't add as new message
           }
-          
+
           return true; // New unique message
         });
-        
+
         if (uniqueNewMessages.length > 0) {
           set({ messages: [...currentMessages, ...uniqueNewMessages] });
         }
@@ -216,7 +216,7 @@ export const useChatStore = create((set, get) => ({
 
   sendMessage: async (messageData) => {
     const { selectedChat } = get();
-    
+
     // Check if we have a selectedGroup from useGroupStore
     let selectedGroup = null;
     try {
@@ -225,7 +225,7 @@ export const useChatStore = create((set, get) => ({
     } catch (error) {
       console.error("Error getting selectedGroup:", error);
     }
-    
+
     // If no selectedChat but we have a selectedGroup, set it up
     let activeChat = selectedChat;
     if (!activeChat && selectedGroup) {
@@ -237,16 +237,16 @@ export const useChatStore = create((set, get) => ({
       set({ selectedChat: groupChatData });
       activeChat = groupChatData;
     }
-    
+
     if (!activeChat) {
       toast.error("Please select a chat to send message");
       return;
     }
-    
+
     try {
       const socket = useAuthStore.getState().socket;
       const authUser = useAuthStore.getState().authUser;
-      
+
       if (!socket || !socket.connected) {
         toast.error("Not connected to server. Please refresh the page.");
         return;
@@ -257,24 +257,28 @@ export const useChatStore = create((set, get) => ({
         chatId: activeChat._id,
         ...messageData,
       };
-      
+
       if (activeChat.groupId || activeChat._id?.startsWith("group_")) {
         messagePayload.groupId = activeChat.groupId || activeChat._id.replace("group_", "");
       }
 
       // Create optimistic message (temporary ID)
       const tempMessageId = `temp_${Date.now()}_${Math.random()}`;
+      const optimisticId = `opt_${Date.now()}_${Math.random()}`; // Unique ID for matching
       const optimisticMessage = {
         _id: tempMessageId,
+        optimisticId: optimisticId, // Store this to match later
         chatId: activeChat._id,
         senderId: authUser ? { _id: authUser._id, ...authUser } : null,
         receiverId: activeChat.otherUser || null,
         groupId: messagePayload.groupId || null,
         text: messageData.text || "",
         image: messageData.image || "",
+        images: messageData.images || [],
         sticker: messageData.sticker || "",
         createdAt: new Date(),
         isOptimistic: true, // Flag to identify optimistic messages
+        isUploading: (messageData.images && messageData.images.length > 0) || messageData.image, // Show loader
       };
 
       // Add optimistic message immediately
@@ -282,14 +286,31 @@ export const useChatStore = create((set, get) => ({
         messages: [...get().messages, optimisticMessage],
       });
 
+      // Safety: Remove isUploading flag after 30 seconds (failsafe)
+      if (optimisticMessage.isUploading) {
+        setTimeout(() => {
+          const currentMessages = get().messages;
+          const msgIndex = currentMessages.findIndex(m => m._id === tempMessageId);
+          if (msgIndex !== -1 && currentMessages[msgIndex].isUploading) {
+            console.log("⏰ Timeout: Removing upload loader (failsafe)");
+            const updated = [...currentMessages];
+            updated[msgIndex] = { ...updated[msgIndex], isUploading: false };
+            set({ messages: updated });
+          }
+        }, 30000); // 30 seconds
+      }
+
+      // Store the optimisticId in the payload so backend can return it
+      messagePayload.optimisticId = optimisticId;
+
       // Emit to server
       socket.emit("send-message", messagePayload);
-      
+
       console.log("📤 Sent message via socket:", messagePayload);
     } catch (error) {
       console.error("Error sending message:", error);
       toast.error(error.response?.data?.message || "Failed to send message");
-      
+
       // Remove optimistic message on error
       const currentMessages = get().messages;
       set({
@@ -332,7 +353,7 @@ export const useChatStore = create((set, get) => ({
       toast.error(error.response?.data?.message || "Failed to delete message");
     }
   },
-  
+
   // Store pending deletion for confirmation
   pendingDeletion: null,
   setPendingDeletion: (data) => {
@@ -344,7 +365,7 @@ export const useChatStore = create((set, get) => ({
     console.log("🔧 [STORE] clearPendingDeletion called");
     set({ pendingDeletion: null });
   },
-  
+
   // Store threshold warning
   thresholdWarning: null,
   setThresholdWarning: (data) => {
@@ -366,6 +387,19 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
+  deleteImageFromMessage: async (messageId, imageIndex) => {
+    try {
+      const socket = useAuthStore.getState().socket;
+      if (!socket || !socket.connected) {
+        toast.error("Not connected to server");
+        return;
+      }
+      socket.emit("delete-image-from-message", { messageId, imageIndex });
+    } catch (error) {
+      toast.error("Failed to delete image");
+    }
+  },
+
   forwardMessage: async (messageId, chatIds) => {
     try {
       await axiosInstance.post("/chat/forward", { messageId, chatIds });
@@ -378,10 +412,10 @@ export const useChatStore = create((set, get) => ({
   sendTypingIndicator: () => {
     const { selectedChat } = get();
     if (!selectedChat) return;
-    
+
     const socket = useAuthStore.getState().socket;
     if (!socket || !socket.connected) return;
-    
+
     socket.emit("typing", { chatId: selectedChat._id });
   },
 
@@ -397,7 +431,7 @@ export const useChatStore = create((set, get) => ({
       console.error("❌ Socket not available");
       return;
     }
-    
+
     if (!socket.connected) {
       console.error("❌ Socket not connected, waiting for connection...");
       // Wait for socket to connect, then retry
@@ -424,7 +458,7 @@ export const useChatStore = create((set, get) => ({
 
     socket.on("new-message", (newMessage) => {
       console.log("📥 Received new-message event:", newMessage);
-      
+
       // Get current selectedChat from store (not closure)
       const currentSelectedChat = get().selectedChat;
       if (!currentSelectedChat) {
@@ -433,72 +467,88 @@ export const useChatStore = create((set, get) => ({
       }
 
       // Check if message belongs to current chat
-      const messageChatId = newMessage.chatId || 
-        (newMessage.groupId 
+      const messageChatId = newMessage.chatId ||
+        (newMessage.groupId
           ? `group_${newMessage.groupId}`
-          : (newMessage.senderId?._id && newMessage.receiverId?._id 
+          : (newMessage.senderId?._id && newMessage.receiverId?._id
             ? `chat_${newMessage.senderId._id}_${newMessage.receiverId._id}`
             : null));
-      
+
       console.log("🔍 Message chatId:", messageChatId, "Current chat:", currentSelectedChat._id);
-      
+
       // More flexible matching - check multiple conditions
-      const isMatchingChat = 
+      const isMatchingChat =
         messageChatId === currentSelectedChat._id ||
         messageChatId === currentSelectedChat._id?.toString() ||
-        (currentSelectedChat.otherUser && 
-         (newMessage.senderId?._id?.toString() === currentSelectedChat.otherUser._id?.toString() || 
-          newMessage.receiverId?._id?.toString() === currentSelectedChat.otherUser._id?.toString())) ||
+        (currentSelectedChat.otherUser &&
+          (newMessage.senderId?._id?.toString() === currentSelectedChat.otherUser._id?.toString() ||
+            newMessage.receiverId?._id?.toString() === currentSelectedChat.otherUser._id?.toString())) ||
         (newMessage.groupId && currentSelectedChat.groupId === newMessage.groupId) ||
         (newMessage.groupId && currentSelectedChat._id?.includes(newMessage.groupId));
-      
+
       if (isMatchingChat) {
         // Check if message already exists (by ID) - normalize IDs for comparison
         const currentMessages = get().messages;
         const messageId = newMessage._id?.toString();
-        
+
         // Check for duplicate by ID (normalize both sides)
         const existsById = messageId && currentMessages.some(msg => {
           const msgId = msg._id?.toString();
           return msgId && msgId === messageId;
         });
-        
+
         if (existsById) {
           console.log("⚠️ Message already exists by ID, skipping:", messageId);
           return;
         }
-        
+
+        // PRIORITY 1: Match by optimisticId (ensures upload loader disappears)
+        if (newMessage.optimisticId) {
+          const optimisticMsg = currentMessages.find(m =>
+            m.isOptimistic && m.optimisticId === newMessage.optimisticId
+          );
+          if (optimisticMsg) {
+            console.log("🔄 Replacing optimistic message by optimisticId (upload complete)");
+            const idx = currentMessages.indexOf(optimisticMsg);
+            const updated = [...currentMessages];
+            updated[idx] = newMessage; // Real message doesn't have isUploading
+            set({ messages: updated });
+            return;
+          }
+        }
+
+        // PRIORITY 2: Content-based matching (fallback)
         // Check for optimistic message with same content and sender
         // Match by: EXACT text content, sender ID, and time (within 10 seconds)
         // Find ALL optimistic messages that could match, then pick the best one
         const allOptimisticMessages = currentMessages.filter(msg => msg.isOptimistic);
-        
+
         // Find the best matching optimistic message
         let bestMatch = null;
         let bestMatchScore = -1;
-        
+
         for (const msg of allOptimisticMessages) {
           if (!msg.isOptimistic) continue;
-          
+
           // Match sender (handle both object and string formats)
           const msgSenderId = msg.senderId?._id?.toString() || msg.senderId?.toString();
           const newMsgSenderId = newMessage.senderId?._id?.toString() || newMessage.senderId?.toString();
           const senderMatch = msgSenderId && newMsgSenderId && msgSenderId === newMsgSenderId;
-          
+
           if (!senderMatch) continue; // Must match sender
-          
+
           // Match time (within 10 seconds - stricter for better matching)
           const timeDiff = Math.abs(
-            new Date(msg.createdAt || 0).getTime() - 
+            new Date(msg.createdAt || 0).getTime() -
             new Date(newMessage.createdAt || 0).getTime()
           );
           const timeMatch = timeDiff < 10000; // 10 seconds
-          
+
           if (!timeMatch) continue; // Must be within time window
-          
+
           // Calculate match score based on content similarity
           let matchScore = 0;
-          
+
           // Exact text match (highest priority)
           if (msg.text && newMessage.text && msg.text.trim() === newMessage.text.trim()) {
             matchScore += 100;
@@ -507,7 +557,7 @@ export const useChatStore = create((set, get) => ({
           } else {
             continue; // Text doesn't match, skip this optimistic message
           }
-          
+
           // Image match
           if (msg.image && newMessage.image && msg.image === newMessage.image) {
             matchScore += 50;
@@ -516,7 +566,7 @@ export const useChatStore = create((set, get) => ({
           } else if ((msg.image && !newMessage.image) || (!msg.image && newMessage.image)) {
             continue; // One has image, other doesn't - not a match
           }
-          
+
           // Sticker match
           if (msg.sticker && newMessage.sticker && msg.sticker === newMessage.sticker) {
             matchScore += 50;
@@ -525,21 +575,21 @@ export const useChatStore = create((set, get) => ({
           } else if ((msg.sticker && !newMessage.sticker) || (!msg.sticker && newMessage.sticker)) {
             continue; // One has sticker, other doesn't - not a match
           }
-          
+
           // Prefer more recent optimistic messages (higher score for closer time)
           matchScore += Math.max(0, 10 - (timeDiff / 1000)); // Up to 10 points for recency
-          
+
           // Prefer optimistic messages that are closer to the end of the array (more recent)
           const msgIndex = currentMessages.indexOf(msg);
           const distanceFromEnd = currentMessages.length - msgIndex;
           matchScore += Math.min(5, distanceFromEnd); // Up to 5 points for being recent
-          
+
           if (matchScore > bestMatchScore) {
             bestMatchScore = matchScore;
             bestMatch = msg;
           }
         }
-        
+
         if (bestMatch && bestMatchScore > 0) {
           console.log("🔄 Replacing optimistic message with real message (score:", bestMatchScore, ")");
           console.log("   Optimistic:", bestMatch.text?.substring(0, 50), "→ Real:", newMessage.text?.substring(0, 50));
@@ -567,18 +617,18 @@ export const useChatStore = create((set, get) => ({
       const currentSelectedChat = get().selectedChat;
       if (!currentSelectedChat) return;
 
-      const messageChatId = updatedMessage.chatId || 
-        (updatedMessage.groupId 
+      const messageChatId = updatedMessage.chatId ||
+        (updatedMessage.groupId
           ? `group_${updatedMessage.groupId}`
-          : (updatedMessage.senderId?._id && updatedMessage.receiverId?._id 
+          : (updatedMessage.senderId?._id && updatedMessage.receiverId?._id
             ? `chat_${updatedMessage.senderId._id}_${updatedMessage.receiverId._id}`
             : null));
-      
-      if (messageChatId === currentSelectedChat._id || 
-          (currentSelectedChat.otherUser && 
-           (updatedMessage.senderId?._id === currentSelectedChat.otherUser._id || 
+
+      if (messageChatId === currentSelectedChat._id ||
+        (currentSelectedChat.otherUser &&
+          (updatedMessage.senderId?._id === currentSelectedChat.otherUser._id ||
             updatedMessage.receiverId?._id === currentSelectedChat.otherUser._id)) ||
-          (updatedMessage.groupId && currentSelectedChat.groupId === updatedMessage.groupId)) {
+        (updatedMessage.groupId && currentSelectedChat.groupId === updatedMessage.groupId)) {
         set({
           messages: get().messages.map((msg) =>
             msg._id === updatedMessage._id ? updatedMessage : msg
@@ -593,10 +643,10 @@ export const useChatStore = create((set, get) => ({
 
       const messageChatId = deletedMessage.chatId;
       console.log("Received message-deleted event:", deletedMessage, "current chat:", currentSelectedChat._id);
-      
+
       // Check if message belongs to current chat (handle both private and group chats)
-      if (messageChatId === currentSelectedChat._id || 
-          (currentSelectedChat.groupId && messageChatId?.includes(currentSelectedChat.groupId))) {
+      if (messageChatId === currentSelectedChat._id ||
+        (currentSelectedChat.groupId && messageChatId?.includes(currentSelectedChat.groupId))) {
         console.log("Removing message:", deletedMessage._id, "from chat:", messageChatId);
         set({
           messages: get().messages.filter((msg) => msg._id !== deletedMessage._id),
@@ -610,18 +660,18 @@ export const useChatStore = create((set, get) => ({
       const currentSelectedChat = get().selectedChat;
       if (!currentSelectedChat) return;
 
-      const messageChatId = reactedMessage.chatId || 
-        (reactedMessage.groupId 
+      const messageChatId = reactedMessage.chatId ||
+        (reactedMessage.groupId
           ? `group_${reactedMessage.groupId}`
-          : (reactedMessage.senderId?._id && reactedMessage.receiverId?._id 
+          : (reactedMessage.senderId?._id && reactedMessage.receiverId?._id
             ? `chat_${reactedMessage.senderId._id}_${reactedMessage.receiverId._id}`
             : null));
-      
-      if (messageChatId === currentSelectedChat._id || 
-          (currentSelectedChat.otherUser && 
-           (reactedMessage.senderId?._id === currentSelectedChat.otherUser._id || 
+
+      if (messageChatId === currentSelectedChat._id ||
+        (currentSelectedChat.otherUser &&
+          (reactedMessage.senderId?._id === currentSelectedChat.otherUser._id ||
             reactedMessage.receiverId?._id === currentSelectedChat.otherUser._id)) ||
-          (reactedMessage.groupId && currentSelectedChat.groupId === reactedMessage.groupId)) {
+        (reactedMessage.groupId && currentSelectedChat.groupId === reactedMessage.groupId)) {
         set({
           messages: get().messages.map((msg) =>
             msg._id === reactedMessage._id ? reactedMessage : msg
@@ -636,19 +686,19 @@ export const useChatStore = create((set, get) => ({
 
       const messageChatId = data.chatId;
       console.log("Received typing event:", data, "current chat:", currentSelectedChat._id);
-      
+
       if (messageChatId === currentSelectedChat._id) {
         console.log("Typing indicator for current chat, adding user:", data.userId);
         // Add typing user if not already in list (compare as strings)
         const currentTypingUsers = get().typingUsers;
         const userIdStr = data.userId?.toString();
         const isAlreadyTyping = currentTypingUsers.some(id => id?.toString() === userIdStr);
-        
+
         if (!isAlreadyTyping && userIdStr) {
           set({
             typingUsers: [...currentTypingUsers, userIdStr],
           });
-          
+
           // Remove typing indicator after 3 seconds
           setTimeout(() => {
             set({
@@ -719,12 +769,12 @@ export const useChatStore = create((set, get) => ({
       console.log("Fetching leaderboard data...");
       const res = await axiosInstance.get("/leaderboard/badges");
       console.log("Leaderboard response:", res.data);
-      
+
       const ranks = {};
       res.data.forEach((user, index) => {
         ranks[user._id] = index + 1; // 1-based rank
       });
-      
+
       console.log("Processed ranks:", ranks);
       set({ userRanks: ranks });
       console.log("Updated userRanks in store:", get().userRanks);

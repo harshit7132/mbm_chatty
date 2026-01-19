@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuthStore } from "../store/useAuthStore";
 import { Camera, Mail, User } from "lucide-react";
+import toast from "react-hot-toast";
 
 const ProfilePage = () => {
   const { authUser, isUpdatingProfile, updateProfile } = useAuthStore();
@@ -19,6 +20,25 @@ const ProfilePage = () => {
       setSelectedImg(base64Image);
       await updateProfile({ profilePic: base64Image });
     };
+  };
+
+  const handleLanguageChange = async (newLanguage) => {
+    if (newLanguage === authUser.preferredLanguage) return;
+
+    const userPoints = authUser.points || authUser.totalPoints || 0;
+    if (userPoints < 50) {
+      toast.error("You need 50 points to change your language preference!");
+      return;
+    }
+
+    if (confirm(`Changing language will cost 50 points. Continue?`)) {
+      try {
+        await updateProfile({ preferredLanguage: newLanguage });
+        toast.success(`Language changed to ${newLanguage === 'en' ? 'English' : 'Hindi'}! 50 points deducted.`);
+      } catch (error) {
+        toast.error(error.response?.data?.message || "Failed to change language");
+      }
+    }
   };
 
   return (
@@ -81,6 +101,42 @@ const ProfilePage = () => {
               </div>
               <p className="px-4 py-2.5 bg-base-200 rounded-lg border">{authUser?.email}</p>
             </div>
+
+            <div className="space-y-4 mt-6">
+              <div className="text-sm font-medium opacity-70">Language Preference</div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between p-3 bg-base-200 rounded-lg">
+                  <div>
+                    <div className="font-medium">Current Language</div>
+                    <div className="text-sm opacity-60">
+                      {authUser.preferredLanguage === 'hi' ? 'हिन्दी (Hindi)' : 'English'}
+                    </div>
+                  </div>
+                  <div className="badge badge-primary">
+                    {authUser.preferredLanguage === 'hi' ? 'HI' : 'EN'}
+                  </div>
+                </div>
+
+                <div className="alert alert-info">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                  <span className="text-sm">Changing language costs <strong>50 points</strong></span>
+                </div>
+
+                <select
+                  className="select select-bordered w-full"
+                  value={authUser.preferredLanguage || 'en'}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
+                >
+                  <option value="en">English</option>
+                  <option value="hi">हिन्दी (Hindi)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="divider"></div>
           </div>
 
           {authUser.badges && authUser.badges.length > 0 && (

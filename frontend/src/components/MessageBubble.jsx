@@ -3,6 +3,8 @@ import { useChatStore } from "../store/useChatStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { useGroupStore } from "../store/useGroupStore";
 import { formatMessageTime } from "../lib/utils";
+import ImagePreview from "./ImagePreview";
+import ForwardModal from "./ForwardModal";
 import {
   MoreVertical,
   Edit,
@@ -29,42 +31,46 @@ const MessageBubble = ({ message, selectedUser }) => {
     forwardMessage,
     editingMessage,
     setEditingMessage,
+    deleteImageFromMessage,
   } = useChatStore();
 
   const [showMenu, setShowMenu] = useState(false);
   const [showEmojis, setShowEmojis] = useState(false);
   const [editText, setEditText] = useState(message.text || "");
-  
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [previewImageIndex, setPreviewImageIndex] = useState(0);
+  const [showForwardModal, setShowForwardModal] = useState(false);
+
   // Handle both populated object and string ID - normalize both to strings for comparison
-  const senderId = typeof message.senderId === 'object' && message.senderId?._id 
-    ? message.senderId._id 
+  const senderId = typeof message.senderId === 'object' && message.senderId?._id
+    ? message.senderId._id
     : message.senderId;
   const normalizedSenderId = senderId?.toString();
   const normalizedAuthUserId = authUser?._id?.toString();
   const isOwnMessage = normalizedSenderId && normalizedAuthUserId && normalizedSenderId === normalizedAuthUserId;
-  
+
   // Extract sender info for group messages
   const senderInfo = typeof message.senderId === 'object' && message.senderId
     ? message.senderId
     : null;
   const isSuspiciousSender = senderInfo?.isSuspicious || senderInfo?.fullName === "Suspicious";
-  const senderName = senderInfo 
+  const senderName = senderInfo
     ? (senderInfo.fullName || senderInfo.username || senderInfo.email?.split("@")[0] || "User")
     : (selectedUser?.fullName || selectedUser?.username || "User");
   const senderAvatar = senderInfo && !isSuspiciousSender
     ? (senderInfo.profilePic || senderInfo.avatar || "/avatar.png")
     : (selectedUser?.profilePic || "/avatar.png");
-  
+
   // Check if this is a group message
   const isGroupMessage = !!message.groupId || !!selectedGroup;
-  
+
   // Check if user is admin in group (for group messages)
   const isGroupAdmin = selectedGroup && (
-    selectedGroup.admins?.some(admin => 
+    selectedGroup.admins?.some(admin =>
       (typeof admin === 'object' ? admin._id : admin) === authUser._id
     ) || selectedGroup.createdBy === authUser._id
   );
-  
+
   // Can delete if: own message OR (group message AND admin)
   const canDelete = isOwnMessage || (message.groupId && isGroupAdmin);
 
@@ -93,13 +99,8 @@ const MessageBubble = ({ message, selectedUser }) => {
     setShowMenu(false);
   };
 
-  const handleForward = async () => {
-    // This would open a modal to select chats
-    // For now, we'll just show a placeholder
-    const chatIds = []; // Would be selected from a modal
-    if (chatIds.length > 0) {
-      forwardMessage(message._id, chatIds);
-    }
+  const handleForward = () => {
+    setShowForwardModal(true);
     setShowMenu(false);
   };
 
@@ -180,6 +181,14 @@ const MessageBubble = ({ message, selectedUser }) => {
         </div>
       ) : (
         <div className="chat-bubble flex flex-col gap-1 relative">
+          {message.isUploading && (
+            <div className="absolute inset-0 bg-base-300/80 rounded-lg flex items-center justify-center z-10">
+              <div className="flex flex-col items-center gap-2">
+                <span className="loading loading-spinner loading-md"></span>
+                <span className="text-xs opacity-70">Uploading images...</span>
+              </div>
+            </div>
+          )}
           {message.callType && (
             <div className="flex items-center gap-2 text-sm opacity-80 italic">
               {message.callType === "video" ? (
@@ -190,19 +199,68 @@ const MessageBubble = ({ message, selectedUser }) => {
               <span>{message.text || `${message.callType === "video" ? "Video" : "Voice"} call ${message.callStatus || "started"}`}</span>
             </div>
           )}
-          {message.image && (
+          {/* Display multiple images or single image */}
+          {(message.images && message.images.length > 0) ? (
+            <div className={`grid gap-1 mb-2 ${message.images.length === 1 ? 'grid-cols-1' :
+              message.images.length === 2 ? 'grid-cols-2' :
+                message.images.length === 3 ? 'grid-cols-3' :
+                  'grid-cols-2'
+              }`}>
+              {message.images.map((img, idx) => (
+                <div key={idx} className="relative group">
+                  <img
+                    src={img}
+                    alt={`Attachment ${idx + 1}`}
+                    className={`rounded-md object-cover cursor-pointer hover:opacity-90 transition-opacity ${message.images.length === 1 ? 'sm:max-w-[200px]' :
+                      'w-full h-24 sm:h-32'
+                      }`}
+                    onClick={() => {
+                      setPreviewImageIndex(idx);
+                      setShowImagePreview(true);
+                    }}
+                  />
+                  {/* Delete button for individual image */}
+                  {isOwnMessage && !message.isUploading && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this image?')) {
+                          deleteImageFromMessage(message._id, idx);
+                        }
+                      }}
+                      className="absolute top-1 right-1 btn btn-xs btn-circle btn-error opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete this image"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : message.image ? (
             <img
               src={message.image}
               alt="Attachment"
-              className="sm:max-w-[200px] rounded-md mb-2"
+              className="sm:max-w-[200px] rounded-md mb-2 cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={() => {
+                setPreviewImageIndex(0);
+                setShowImagePreview(true);
+              }}
             />
-          )}
+          ) : null}
           {message.sticker && (
             <img
               src={message.sticker}
               alt="Sticker"
               className="w-32 h-32 object-contain"
             />
+          )}
+          {/* Forwarded message indicator */}
+          {message.forwardedFromName && (
+            <div className="text-xs opacity-60 italic mb-1 flex items-center gap-1">
+              <Forward size={12} />
+              Forwarded from: {message.forwardedFromName}
+            </div>
           )}
           {message.text && !message.callType && <p>{message.text}</p>}
 
@@ -322,6 +380,23 @@ const MessageBubble = ({ message, selectedUser }) => {
             </div>
           )}
         </div>
+      )}
+
+      {/* Image Preview Modal */}
+      {showImagePreview && (
+        <ImagePreview
+          images={message.images && message.images.length > 0 ? message.images : [message.image]}
+          initialIndex={previewImageIndex}
+          onClose={() => setShowImagePreview(false)}
+        />
+      )}
+
+      {/* Forward Modal */}
+      {showForwardModal && (
+        <ForwardModal
+          message={message}
+          onClose={() => setShowForwardModal(false)}
+        />
       )}
     </div>
   );

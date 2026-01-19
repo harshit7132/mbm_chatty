@@ -209,8 +209,8 @@ router.put("/:groupId/icon", protectRoute, async (req, res) => {
     }
 
     if (!isValidFormat) {
-      return res.status(400).json({ 
-        message: `Invalid file format. Expected ${validIconType === "image" ? "image" : validIconType === "gif" ? "GIF" : "MP4 video"}` 
+      return res.status(400).json({
+        message: `Invalid file format. Expected ${validIconType === "image" ? "image" : validIconType === "gif" ? "GIF" : "MP4 video"}`
       });
     }
 
@@ -225,7 +225,7 @@ router.put("/:groupId/icon", protectRoute, async (req, res) => {
     const userPoints = user.points || user.totalPoints || 0;
 
     if (userPoints < pointsRequired) {
-      return res.status(402).json({ 
+      return res.status(402).json({
         message: `Insufficient chatty points. You need ${pointsRequired} points to change group icon to ${validIconType}`,
         requiredPoints: pointsRequired,
         currentPoints: userPoints,
@@ -399,16 +399,16 @@ router.get("/:groupId/members", protectRoute, async (req, res) => {
     const User = (await import("../models/user.model.js")).default;
     const Message = (await import("../models/message.model.js")).default;
     const currentUser = await User.findById(req.user._id).select("friends");
-    
+
     if (!currentUser) {
       return res.status(404).json({ message: "User not found" });
     }
-    
+
     const isOwner = group.createdBy._id.toString() === req.user._id.toString();
-    
+
     // Get friends list - ensure we have the friends field
     let friendsList = currentUser.friends || [];
-    
+
     // Convert friends list to string array for easier comparison
     // Handle both ObjectId instances and string IDs
     let friendsListStr = friendsList.map(f => {
@@ -420,13 +420,13 @@ router.get("/:groupId/members", protectRoute, async (req, res) => {
       // If it's an ObjectId object, use toString()
       return f.toString();
     }).filter(Boolean);
-    
+
     // For each group member, check if they've chatted but aren't friends yet
     // Auto-add them as friends if they have message history
     for (const member of group.members) {
       const memberId = member._id.toString();
       const isCurrentUser = memberId === req.user._id.toString();
-      
+
       if (!isCurrentUser && !friendsListStr.includes(memberId)) {
         // Check if they have chatted before
         const hasChatted = await Message.findOne({
@@ -435,13 +435,13 @@ router.get("/:groupId/members", protectRoute, async (req, res) => {
             { senderId: member._id, receiverId: req.user._id },
           ],
         });
-        
+
         if (hasChatted) {
           // Add to friends list
           if (!currentUser.friends) currentUser.friends = [];
           currentUser.friends.push(member._id);
           friendsListStr.push(memberId);
-          
+
           // Also add current user to the other user's friends list
           const otherUser = await User.findById(member._id);
           if (otherUser) {
@@ -455,12 +455,12 @@ router.get("/:groupId/members", protectRoute, async (req, res) => {
         }
       }
     }
-    
+
     // Save updated friends list if it changed
     if (currentUser.isModified('friends')) {
       await currentUser.save();
     }
-    
+
     // Helper function to mask email (first letter + ***@domain)
     const maskEmail = (email) => {
       if (!email) return "***@gmail.com";
@@ -474,13 +474,13 @@ router.get("/:groupId/members", protectRoute, async (req, res) => {
     const membersWithVisibility = group.members.map((member) => {
       const memberId = member._id.toString();
       const isCurrentUser = memberId === req.user._id.toString();
-      
+
       // Check if member is in friends list
       const isFriend = friendsListStr.includes(memberId);
-      
+
       // Owner can see all members, others can only see friends or themselves
       const canSee = isOwner || isCurrentUser || isFriend;
-      
+
       return {
         _id: member._id,
         fullName: canSee ? (member.fullName || member.username || member.email?.split("@")[0] || "User") : "Suspicious",
@@ -521,11 +521,11 @@ router.get("/:groupId/messages", protectRoute, async (req, res) => {
 
     const User = (await import("../models/user.model.js")).default;
     const Message = (await import("../models/message.model.js")).default;
-    
+
     // Get current user's friends list for visibility check
     const currentUser = await User.findById(req.user._id).select("friends");
     const isOwner = group.createdBy._id.toString() === req.user._id.toString();
-    
+
     // Convert friends list to string array
     let friendsListStr = [];
     if (currentUser && currentUser.friends) {
@@ -545,16 +545,16 @@ router.get("/:groupId/messages", protectRoute, async (req, res) => {
     // Apply visibility logic to messages
     const messagesWithVisibility = messages.map((message) => {
       const messageObj = message.toObject();
-      
+
       // If sender is populated, apply visibility logic
       if (messageObj.senderId && typeof messageObj.senderId === 'object') {
         const senderId = messageObj.senderId._id.toString();
         const isCurrentUser = senderId === req.user._id.toString();
         const isFriend = friendsListStr.includes(senderId);
-        
+
         // Owner can see all, others can only see friends or themselves
         const canSee = isOwner || isCurrentUser || isFriend;
-        
+
         if (!canSee) {
           // Hide sender info for non-friends (except owner)
           messageObj.senderId = {
@@ -568,8 +568,14 @@ router.get("/:groupId/messages", protectRoute, async (req, res) => {
           };
         }
       }
-      
+
       return messageObj;
+    });
+
+    console.log("📥 [GROUP MESSAGES] Retrieved from DB:", {
+      count: messagesWithVisibility.length,
+      lastMsgHasImages: messagesWithVisibility.length > 0 ? !!messagesWithVisibility[messagesWithVisibility.length - 1].images : false,
+      lastMsgImages: messagesWithVisibility.length > 0 ? messagesWithVisibility[messagesWithVisibility.length - 1].images : null
     });
 
     res.status(200).json(messagesWithVisibility);
